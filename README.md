@@ -15,7 +15,7 @@ Guarded Telegram access to a personal account via Telethon/MTProto.
 - search messages
 - inspect unread chats and DMs
 - send, mark-read, archive, and mute only with explicit approval and `--execute`
-- uses a skill-local bootstrap flow and stores auth state in `~/.config/telegram-cli/config.json`
+- uses a cached virtualenv bootstrap flow and stores auth state in `~/.config/telegram-cli/config.json`
 
 ### `ddg-search`
 
@@ -24,7 +24,7 @@ Lightweight DuckDuckGo search as a no-key fallback or second source.
 - text, news, image, and video search
 - instant-answer lookups
 - DuckDuckGo bang resolution
-- local script-based skill with a skill-local bootstrap flow
+- local script-based skill with a cached virtualenv bootstrap flow
 
 ### `twitterapi-io`
 
@@ -42,8 +42,7 @@ Each skill is self-contained:
 - `scripts/`: local entrypoints and helpers
 - `references/`: optional docs or links
 
-Some skills may also include skill-specific generated local state such as `.venv/`. Those should generally not be committed.
-The `skills` installer drops dotfiles when installing skills, so some bootstrap scripts recreate a local `.gitignore` in the installed copy when needed.
+Generated local state should live outside the repo where practical: credentials in `~/.config/<skill-name>/`, caches and virtualenvs in `~/.cache/<skill-name>/`, and durable generated files in `~/.local/share/<skill-name>/`.
 
 ## Using A Skill
 

@@ -12,7 +12,7 @@ from typing import Any, Optional
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 SKILL_DIR = SCRIPT_DIR.parent
-LOCAL_VENV_PYTHON = SKILL_DIR / ".venv" / "bin" / "python"
+LOCAL_VENV_PYTHON = Path.home() / ".cache" / "ddg-search" / "venv" / "bin" / "python"
 BOOTSTRAP_SCRIPT = SCRIPT_DIR / "bootstrap_venv.sh"
 
 
@@ -64,7 +64,7 @@ def run_search(args: argparse.Namespace) -> int:
         from ddgs import DDGS
     except Exception as exc:
         raise SystemExit(
-            f"ddgs is not installed. Bootstrap the skill-local environment first: {BOOTSTRAP_SCRIPT}"
+            f"ddgs is not installed. Bootstrap the skill environment first: {BOOTSTRAP_SCRIPT}"
         ) from exc
 
     query = build_query(args)

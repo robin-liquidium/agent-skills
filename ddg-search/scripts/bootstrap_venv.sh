@@ -2,19 +2,11 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SKILL_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-VENV_DIR="$SKILL_DIR/.venv"
-GITIGNORE_PATH="$SKILL_DIR/.gitignore"
-
-if [ ! -f "$GITIGNORE_PATH" ]; then
-  cat >"$GITIGNORE_PATH" <<'EOF'
-/.venv/
-__pycache__/
-EOF
-fi
+VENV_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/ddg-search/venv"
+mkdir -p "$(dirname "$VENV_DIR")"
 
 python3 -m venv "$VENV_DIR"
 "$VENV_DIR/bin/pip" install --upgrade pip
 "$VENV_DIR/bin/pip" install "ddgs>=9,<10"
 
-echo "ok: ddg-search local venv ready at $VENV_DIR"
+echo "ok: ddg-search venv ready at $VENV_DIR"

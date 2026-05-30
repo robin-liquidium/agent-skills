@@ -21,8 +21,8 @@ This skill exists to make fallback web search simple and low-noise instead of re
 
 ## Local setup
 
-Prefer the skill-local script and a skill-local virtual environment over any global CLI install.
-Treat `.venv` as generated local state, not part of the skill itself.
+Prefer the skill-local script and cached virtualenv over any global CLI install.
+Treat the virtualenv under `~/.cache/ddg-search/venv` as generated local state, not part of the skill itself.
 If the installer drops skill-local dotfiles, the bootstrap script recreates `.gitignore` automatically.
 
 Bootstrap the local environment:
@@ -37,7 +37,7 @@ After bootstrap, use:
 <skill-path>/scripts/ddg-search
 ```
 
-If `.venv` is missing later, just run the bootstrap script again.
+If the cached virtualenv is missing later, just run the bootstrap script again.
 
 ## Commands
 
@@ -98,7 +98,7 @@ If `.venv` is missing later, just run the bootstrap script again.
 ## Workflow
 
 1. Read `references/notes.md` if you want quick selection guidance.
-2. Ensure the skill-local virtual environment is bootstrapped.
+2. Ensure the cached virtualenv is bootstrapped.
 3. Use `search` for normal search, `instant` for instant-answer lookups, and `bang` when a DuckDuckGo bang is the cleanest path.
 4. Parse JSON output by default.
 5. Cross-check with another source when the question is important.
@@ -120,7 +120,7 @@ Use `--text` when you want a readable terminal view.
 - Python implementation: `scripts/ddg_search.py`
 - Local bootstrap: `scripts/bootstrap_venv.sh`
 - Notes: `references/notes.md`
-- `.venv/` is generated local state and can be recreated with `scripts/bootstrap_venv.sh`
+- `~/.cache/ddg-search/venv` is generated local state and can be recreated with `<skill-path>/scripts/bootstrap_venv.sh`
 
 ## When to stop and ask
 

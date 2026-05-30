@@ -44,7 +44,7 @@ Important: the underlying Telethon session still has high privilege because it i
 ## Prerequisites
 
 1. Telegram API credentials from `https://my.telegram.org`
-2. Telethon installed through the skill-local bootstrap
+2. Telethon installed through the cached virtualenv bootstrap
 3. One interactive login to create a session string
 
 ## Install

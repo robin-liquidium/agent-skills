@@ -24,9 +24,9 @@ This skill exists because Telegram Bot API is the wrong tool for reading a real 
 
 ## Local setup
 
-Prefer the skill-local script and a skill-local virtual environment over any global CLI install.
+Prefer the skill-local script and cached virtualenv over any global CLI install.
 Prefer saved Telegram config over shell-exported environment variables once setup is complete.
-Treat `.venv` as generated local state, not part of the skill itself.
+Treat the virtualenv under `~/.cache/telegram-cli/venv` as generated local state, not part of the skill itself.
 If the installer drops skill-local dotfiles, the bootstrap script recreates `.gitignore` automatically.
 
 Bootstrap the local environment:
@@ -43,7 +43,7 @@ After bootstrap, use:
 
 `scripts/telegram-readonly` remains as a backwards-compatible alias for older workflows.
 
-If `.venv` is missing later, just run the bootstrap script again.
+If the cached virtualenv is missing later, just run the bootstrap script again.
 
 Primary config path:
 
@@ -169,7 +169,7 @@ Send only after the user approves final text and recipient:
 ## Workflow
 
 1. Read `references/setup-and-safety.md` if setup, auth, or unread-state behavior matters.
-2. Ensure the skill-local virtual environment is bootstrapped.
+2. Ensure the cached virtualenv is bootstrapped.
 3. Ensure Telegram API credentials exist.
 4. Run `auth` once to create the session and write `~/.config/telegram-cli/config.json`.
 5. Use `dialogs`, `messages`, `search`, `unread-dialogs`, or `unread-dms` as needed.
@@ -199,7 +199,7 @@ Dialog objects include:
 - Setup notes: `references/setup-and-safety.md`
 - Config storage: `~/.config/telegram-cli/config.json`
 - `.env` is optional fallback only; it is not the preferred long-term setup.
-- `.venv/` is generated local state and can be recreated with `scripts/bootstrap_venv.sh`.
+- `~/.cache/telegram-cli/venv` is generated local state and can be recreated with `<skill-path>/scripts/bootstrap_venv.sh`.
 
 ## When to stop and ask
 

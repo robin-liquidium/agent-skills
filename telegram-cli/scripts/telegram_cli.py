@@ -14,7 +14,7 @@ from typing import Any, Optional
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 SKILL_DIR = SCRIPT_DIR.parent
-LOCAL_VENV_PYTHON = SKILL_DIR / ".venv" / "bin" / "python"
+LOCAL_VENV_PYTHON = Path.home() / ".cache" / "telegram-cli" / "venv" / "bin" / "python"
 BOOTSTRAP_SCRIPT = SCRIPT_DIR / "bootstrap_venv.sh"
 
 
@@ -123,7 +123,7 @@ async def build_client(settings: Settings):
         from telethon.sessions import StringSession
     except Exception as exc:
         raise SystemExit(
-            f"Telethon is not installed. Bootstrap the skill-local environment first: {BOOTSTRAP_SCRIPT}"
+            f"Telethon is not installed. Bootstrap the skill environment first: {BOOTSTRAP_SCRIPT}"
         ) from exc
 
     client = TelegramClient(
@@ -237,7 +237,7 @@ async def cmd_auth(args: argparse.Namespace) -> int:
         from telethon.sessions import StringSession
     except Exception as exc:
         raise SystemExit(
-            f"Telethon is not installed. Bootstrap the skill-local environment first: {BOOTSTRAP_SCRIPT}"
+            f"Telethon is not installed. Bootstrap the skill environment first: {BOOTSTRAP_SCRIPT}"
         ) from exc
 
     raw = load_raw_config()
