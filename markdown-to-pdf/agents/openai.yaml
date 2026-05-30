@@ -1,0 +1,4 @@
+interface:
+  display_name: "Markdown to PDF"
+  short_description: "Render Markdown files to clean PDFs"
+  default_prompt: "Use $markdown-to-pdf to convert a Markdown file into a clean PDF, defaulting to a pageless-style single tall page fitted to the content unless another page size is requested."

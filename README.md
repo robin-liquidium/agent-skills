@@ -34,6 +34,10 @@ Read-only Twitter/X data access via `twitterapi.io`.
 - local script-based skill, no global CLI required
 - stores API key in `~/.config/twitterapi-io/config.json`
 
+### `markdown-to-pdf`
+
+Local Markdown-to-PDF renderer for clean text-first PDFs.
+
 ## Repo Layout
 
 Each skill is self-contained:
@@ -53,6 +57,7 @@ Examples:
 - [ddg-search](ddg-search/SKILL.md)
 - [telegram-cli](telegram-cli/SKILL.md)
 - [twitterapi-io](twitterapi-io/SKILL.md)
+- [markdown-to-pdf](markdown-to-pdf/SKILL.md)
 
 ## Notes
 
