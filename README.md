@@ -82,6 +82,14 @@ Local Markdown-to-PDF renderer for clean text-first PDFs.
 npx skills add robin-liquidium/agent-skills@markdown-to-pdf -g -y
 ```
 
+### `imagemagick`
+
+ImageMagick CLI workflows for editing, converting, compositing, and compressing raster images.
+
+```bash
+npx skills add robin-liquidium/agent-skills@imagemagick -g -y
+```
+
 ### `liquidium-borrow`
 
 Liquidium SDK helper for accountless instant-loan borrow flows and profile portfolio reads.
@@ -112,6 +120,7 @@ Generated local state should live outside the repo where practical: credentials 
 - [telegram-cli](telegram-cli/SKILL.md)
 - [twitterapi-io](twitterapi-io/SKILL.md)
 - [markdown-to-pdf](markdown-to-pdf/SKILL.md)
+- [imagemagick](imagemagick/SKILL.md)
 - [liquidium-borrow](liquidium-borrow/SKILL.md)
 
 ## Notes
