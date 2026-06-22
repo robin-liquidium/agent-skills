@@ -103,6 +103,14 @@ npx skills add robin-liquidium/agent-skills@liquidium-borrow -g -y
 - save local loan references under `~/.local/share/liquidium-borrow/`
 - refresh status, repayment, add-collateral, deposit detection, and activity instructions
 
+### `send-it`
+
+End-to-end PR delivery workflow for reviewing, opening a PR, monitoring CI and comments, fixing feedback, and merging once clean.
+
+```bash
+npx skills add robin-liquidium/agent-skills@send-it -g -y
+```
+
 ## Repo Layout
 
 Each skill is self-contained:
@@ -122,6 +130,7 @@ Generated local state should live outside the repo where practical: credentials 
 - [markdown-to-pdf](markdown-to-pdf/SKILL.md)
 - [imagemagick](imagemagick/SKILL.md)
 - [liquidium-borrow](liquidium-borrow/SKILL.md)
+- [send-it](send-it/SKILL.md)
 
 ## Notes
 

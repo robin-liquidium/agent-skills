@@ -1,0 +1,4 @@
+interface:
+  display_name: "Send It"
+  short_description: "Review, PR, monitor, fix, and merge"
+  default_prompt: "Use $send-it to take the current branch through review, pull request creation, CI and comment monitoring, fixes, and merge once clean."
