@@ -1,0 +1,4 @@
+interface:
+  display_name: "Image to Vector"
+  short_description: "Convert raster images into SVG vectors"
+  default_prompt: "Use $image-to-vector to convert this raster image into an optimized SVG."
