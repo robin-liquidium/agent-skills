@@ -200,6 +200,23 @@ Dialog objects include:
 - Config storage: `~/.config/telegram-cli/config.json`
 - `.env` is optional fallback only; it is not the preferred long-term setup.
 - `~/.cache/telegram-cli/venv` is generated local state and can be recreated with `<skill-path>/scripts/bootstrap_venv.sh`.
+- ChatGPT/Codex MCP server: `mcp/server.mjs`
+
+## ChatGPT/Codex MCP
+
+The MCP server exposes typed read tools for dialogs, messages, search, and unread lists. Telegram writes use a mandatory two-step flow: a `telegram_prepare_*` tool returns the resolved dry-run preview and a short-lived one-time token; `telegram_execute_prepared_action` can consume that frozen token only after the user explicitly approves the exact preview in a new message.
+
+The MCP intentionally does not expose arbitrary shell arguments, local text-file paths, interactive auth, edit/delete operations, or background watchers. Run interactive Telegram authentication through the local CLI before starting the MCP.
+
+Install and start locally:
+
+```bash
+cd <skill-path>/mcp
+npm install
+node server.mjs
+```
+
+The durable launcher is `scripts/telegram-mcp`. For an OpenAI Secure MCP Tunnel on this host, install the launcher and service template, create a separate tunnel and restricted runtime key, then run `scripts/finish-telegram-mcp-tunnel`.
 
 ## When to stop and ask
 

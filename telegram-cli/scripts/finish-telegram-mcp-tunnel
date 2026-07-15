@@ -1,0 +1,83 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+tunnel_client="$HOME/.local/bin/tunnel-client"
+mcp_launcher="$HOME/.local/bin/telegram-cli-mcp"
+runtime_dir="$HOME/.config/openai-tunnel-telegram"
+runtime_env="$runtime_dir/runtime.env"
+profile_name="telegram-cli"
+service_name="telegram-mcp-tunnel.service"
+
+if [[ ! -x "$tunnel_client" || ! -x "$mcp_launcher" ]]; then
+  echo "The local Telegram tunnel components are not installed." >&2
+  exit 1
+fi
+
+printf 'Tunnel ID (tunnel_...): '
+IFS= read -r tunnel_id
+if [[ ! "$tunnel_id" =~ ^tunnel_[0-9a-f]{32}$ ]]; then
+  echo "That tunnel ID does not have the expected format." >&2
+  exit 1
+fi
+
+printf 'Restricted runtime API key (input hidden): '
+IFS= read -r -s runtime_key
+printf '\n'
+if [[ -z "$runtime_key" ]]; then
+  echo "The runtime API key cannot be empty." >&2
+  exit 1
+fi
+
+mkdir -p "$runtime_dir"
+chmod 700 "$runtime_dir"
+umask 077
+printf 'CONTROL_PLANE_API_KEY=%s\n' "$runtime_key" > "$runtime_env"
+unset runtime_key
+
+"$tunnel_client" init \
+  --sample sample_mcp_stdio_local \
+  --profile "$profile_name" \
+  --force \
+  --tunnel-id "$tunnel_id" \
+  --mcp-command "$mcp_launcher" \
+  --health-listen-addr 127.0.0.1:8766
+
+set -a
+# shellcheck disable=SC1090
+source "$runtime_env"
+set +a
+
+systemctl --user daemon-reload
+service_stopped=false
+restore_service() {
+  if [[ "$service_stopped" == true ]]; then
+    systemctl --user start "$service_name" >/dev/null 2>&1 || true
+  fi
+}
+trap restore_service EXIT
+
+if systemctl --user is-active --quiet "$service_name"; then
+  systemctl --user stop "$service_name"
+  service_stopped=true
+fi
+
+"$tunnel_client" doctor --profile "$profile_name" --explain
+unset CONTROL_PLANE_API_KEY
+
+systemctl --user enable --now "$service_name"
+service_stopped=false
+trap - EXIT
+
+for _ in 1 2 3 4 5; do
+  if curl -fsS http://127.0.0.1:8766/readyz >/dev/null 2>&1; then
+    echo "Telegram CLI MCP tunnel is running and ready."
+    echo "Tunnel ID: $tunnel_id"
+    echo "Add it in ChatGPT: https://chatgpt.com/plugins"
+    exit 0
+  fi
+  sleep 1
+done
+
+echo "The service started but is not ready yet. Recent status:" >&2
+systemctl --user --no-pager --full status "$service_name" >&2 || true
+exit 1

@@ -192,6 +192,18 @@ If unread state changes unexpectedly, stop and adjust workflow before wider roll
 - Use dry-run before every write.
 - Keep sends socially reviewed: present a draft first, then send only after final text and recipient are approved.
 
+## MCP safety model
+
+The ChatGPT/Codex MCP wrapper mirrors the CLI's safety boundary with typed tools rather than arbitrary command execution.
+
+- Read tools map narrowly to dialogs, messages, search, unread dialogs, and unread DMs.
+- Write tools always begin with a dry-run `telegram_prepare_*` call.
+- Prepared actions return an opaque one-time token bound to the exact resolved chat and parameters.
+- Tokens expire after 10 minutes, disappear on MCP restart, and are consumed before execution for at-most-once behavior.
+- `telegram_execute_prepared_action` is annotated as consequential and must only be called after explicit approval of the preview in a new user message.
+- Interactive auth, local file paths, arbitrary shell arguments, edits, deletes, and background automation are not exposed.
+- Telegram-supplied names and messages are returned inside a structured untrusted-data envelope, with control/invisible-character stripping and explicit instructions never to follow content as model directions.
+
 ## Docs
 
 Fast lookup:

@@ -3,3 +3,4 @@ __pycache__/
 .env
 .env.*
 !.env.example
+mcp/node_modules/
