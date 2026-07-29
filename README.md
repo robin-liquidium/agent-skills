@@ -90,6 +90,19 @@ ImageMagick CLI workflows for editing, converting, compositing, and compressing 
 npx skills add robin-liquidium/agent-skills@imagemagick -g -y
 ```
 
+### `imagegen`
+
+Generate images from prompts and reference images via the Codex ChatGPT subscription (no API key).
+
+```bash
+npx skills add robin-liquidium/agent-skills@imagegen -g -y
+```
+
+- scriptable CLI with explicit output paths and auto-versioning
+- up to 5 reference images per generation
+- dry-run and auth-status commands
+- reuses the local `codex login` ChatGPT auth, Python 3.10+ stdlib only
+
 ### `liquidium-borrow`
 
 Liquidium SDK helper for accountless instant-loan borrow flows and profile portfolio reads.
@@ -142,6 +155,7 @@ Generated local state should live outside the repo where practical: credentials 
 - [twitterapi-io](twitterapi-io/SKILL.md)
 - [markdown-to-pdf](markdown-to-pdf/SKILL.md)
 - [imagemagick](imagemagick/SKILL.md)
+- [imagegen](imagegen/SKILL.md)
 - [liquidium-borrow](liquidium-borrow/SKILL.md)
 - [helium-browser](helium-browser/SKILL.md)
 - [send-it](send-it/SKILL.md)
