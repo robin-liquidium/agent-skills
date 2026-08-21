@@ -1,6 +1,6 @@
 ---
 name: telegram-cli
-description: Guarded Telegram CLI for the user's personal account via Telethon/MTProto. Use to inspect chats, list unread dialogs, read/search messages, and perform approved work actions like send, mark-read, archive, and mute with explicit dry-run/execute safety.
+description: Personal Telegram via Telethon; reads free, writes need explicit execute approval.
 allowed-tools: Bash(./scripts/telegram-readonly:*), Bash(./scripts/telegram-cli:*)
 ---
 

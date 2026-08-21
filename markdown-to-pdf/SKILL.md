@@ -1,6 +1,6 @@
 ---
 name: markdown-to-pdf
-description: "Convert Markdown to clean PDF using bundled renderer; investor docs, memos, briefs."
+description: Markdown→PDF via bundled renderer; memos, investor docs, briefs.
 ---
 
 # Markdown To PDF

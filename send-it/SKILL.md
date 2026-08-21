@@ -1,6 +1,6 @@
 ---
 name: send-it
-description: Use when the user wants to send changes toward main by running pre-PR reviews, creating a pull request, attaching before/after screenshots for UI PRs, monitoring CI and review comments, fixing valid feedback, and repeating until clean. Do not merge unless the user explicitly asks for a merge.
+description: "Ship to main: pre-PR review, open PR, UI screenshots, CI/review loop; merge only if asked."
 ---
 
 # Send It

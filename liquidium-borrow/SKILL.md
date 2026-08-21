@@ -1,6 +1,6 @@
 ---
 name: liquidium-borrow
-description: Use when building or operating Liquidium borrow, supply, repay, portfolio, loan-status, or liquidation-risk workflows with the @liquidium/client TypeScript SDK. Default to accountless/headless instant loans that do not require wallet connection; use signed account/profile flows only when the user explicitly wants a connected-wallet dashboard, profile-based supply/borrow/withdraw/repay, or portfolio management.
+description: Liquidium @liquidium/client borrow/supply/repay/portfolio; default accountless instant loans.
 allowed-tools: Bash(./scripts/liquidium-borrow:*)
 license: MIT
 metadata:

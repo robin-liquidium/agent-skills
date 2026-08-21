@@ -1,6 +1,6 @@
 ---
 name: image-to-vector
-description: Convert raster images such as PNG, JPG, JPEG, and WebP into optimized SVG vectors with local VTracer, optional ImageMagick preprocessing, and optional SVGO cleanup. Use when Codex needs to vectorize flat-color artwork, generated images, icons, logos, line art, diagrams, cartoons, or compare SVG output settings for web assets.
+description: Raster→SVG via VTracer; icons/logos/line art; optional ImageMagick/SVGO.
 ---
 
 # Image To Vector

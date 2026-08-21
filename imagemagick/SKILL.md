@@ -1,6 +1,6 @@
 ---
 name: imagemagick
-description: "ImageMagick CLI workflows for editing, converting, compositing, and compressing raster images using `magick` and subcommands (`magick identify`, `magick mogrify`, `magick montage`, `magick composite`, `magick compare`). Use for tasks like: batch resize/crop/rotate, optimize images for web (JPEG/PNG/WebP/AVIF), strip EXIF/ICC metadata, generate thumbnails/sprites/montages, render text and overlays, convert PDF/SVG to raster images (when delegates are available), and inspect image properties."
+description: "ImageMagick `magick` workflows: resize, convert, composite, compress, inspect."
 ---
 
 # ImageMagick CLI

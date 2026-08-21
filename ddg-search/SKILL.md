@@ -1,6 +1,6 @@
 ---
 name: ddg-search
-description: Search the web with DuckDuckGo as a no-API-key fallback or second source. Use when the normal web search tool or primary search provider is rate-limited, failing, unavailable, not delivering enough useful results, or producing weak results, and you want quick text, news, image, or video search results, instant-answer lookups, or DuckDuckGo bang resolution without browser automation.
+description: DuckDuckGo web search fallback when primary search is rate-limited/weak.
 allowed-tools: Bash(./scripts/ddg-search:*)
 ---
 

@@ -1,6 +1,6 @@
 ---
 name: twitterapi-io
-description: Fetch and paginate Twitter/X data using twitterapi.io. Use when you need to fetch one tweet, fetch a user profile, get recent tweets for a user, fetch replies, quote tweets, thread context, or mentions, or run twitterapi.io advanced search queries without hand-rolling raw API requests each time.
+description: "twitterapi.io fetch: tweets, profiles, replies, quotes, threads, search."
 allowed-tools: Bash(./scripts/twitterapi-io:*)
 ---
 
