@@ -11,10 +11,15 @@ if [[ "${TWITTERAPI_IO_SECURE_REEXEC:-}" != "1" \
   && -r "$encrypted_credential" \
   && -x "$credential_loader" \
   && -x "$(command -v systemd-run 2>/dev/null || true)" ]]; then
-  exec systemd-run --user --quiet --wait --pipe --collect --same-dir --expand-environment=no \
+  command_args=("$credential_loader" runtime.env "$SCRIPT_DIR/twitterapi-io" "$@")
+  escaped_args=()
+  for arg in "${command_args[@]}"; do
+    escaped_args+=("${arg//\$/\$\$}")
+  done
+  exec systemd-run --user --quiet --wait --pipe --collect --same-dir \
     --setenv=TWITTERAPI_IO_SECURE_REEXEC=1 \
     --property="LoadCredentialEncrypted=runtime.env:${encrypted_credential}" \
-    "$credential_loader" runtime.env "$SCRIPT_DIR/twitterapi-io" "$@"
+    "${escaped_args[@]}"
 fi
 
 exec python3 "$SCRIPT_DIR/twitterapi_io.py" "$@"

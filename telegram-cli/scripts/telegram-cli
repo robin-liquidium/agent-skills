@@ -13,7 +13,7 @@ if [[ "${TELEGRAM_CLI_SECURE_REEXEC:-}" != "1" \
   && -x "$credential_loader" \
   && -x "$(command -v systemd-run 2>/dev/null || true)" ]]; then
   unit="telegram-cli-$(date +%s)-$$"
-  run_args=(--user --quiet --wait --pipe --collect --same-dir --expand-environment=no --unit="$unit")
+  run_args=(--user --quiet --wait --pipe --collect --same-dir --unit="$unit")
   if [[ "${1:-}" != "auth" ]]; then
     run_args+=(--property=RuntimeMaxSec=75s)
   fi
@@ -28,10 +28,15 @@ if [[ "${TELEGRAM_CLI_SECURE_REEXEC:-}" != "1" \
   trap 'exit 130' INT
   trap 'exit 143' TERM
   trap 'exit 129' HUP
+  command_args=("$credential_loader" runtime.env "$SCRIPT_DIR/telegram-cli" "$@")
+  escaped_args=()
+  for arg in "${command_args[@]}"; do
+    escaped_args+=("${arg//\$/\$\$}")
+  done
   systemd-run "${run_args[@]}" \
     --setenv=TELEGRAM_CLI_SECURE_REEXEC=1 \
     --property="LoadCredentialEncrypted=runtime.env:${encrypted_credential}" \
-    "$credential_loader" runtime.env "$SCRIPT_DIR/telegram-cli" "$@" <&0 &
+    "${escaped_args[@]}" <&0 &
   run_pid=$!
   status=0
   wait "$run_pid" || status=$?

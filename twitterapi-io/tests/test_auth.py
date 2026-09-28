@@ -141,29 +141,31 @@ class CredentialTests(unittest.TestCase):
         self.assertEqual(self.config_path.read_text(), original)
 
     def test_linux_launcher_selects_encrypted_credential_when_config_absent(self):
-        credential = self.home / ".config" / "credentials.encrypted" / "twitterapi-mcp-tunnel.env.cred"
+        home = self.home / "literal${HOME}"
+        home.mkdir()
+        credential = home / ".config" / "credentials.encrypted" / "twitterapi-mcp-tunnel.env.cred"
         credential.parent.mkdir(parents=True)
         credential.write_text("fake encrypted credential")
-        loader = self.home / ".local" / "libexec" / "with-systemd-env-credential"
+        loader = home / ".local" / "libexec" / "with-systemd-env-credential"
         loader.parent.mkdir(parents=True)
         loader.write_text("#!/bin/sh\nexit 0\n")
         loader.chmod(0o700)
-        fake_bin = self.home / "bin"
+        fake_bin = home / "bin"
         fake_bin.mkdir()
         systemd_run = fake_bin / "systemd-run"
         systemd_run.write_text('#!/bin/sh\nprintf "%s\\n" "$@" > "$HOME/systemd-run-args"\n')
         systemd_run.chmod(0o700)
         result = subprocess.run(
-            ["bash", "scripts/twitterapi-io", "help"], cwd=SKILL_DIR, text=True, capture_output=True,
-            env={**os.environ, "HOME": str(self.home), "PATH": f"{fake_bin}:{os.environ['PATH']}"}, check=False,
+            ["bash", "scripts/twitterapi-io", "help", "${LITERAL}", "$$"], cwd=SKILL_DIR, text=True, capture_output=True,
+            env={**os.environ, "HOME": str(home), "PATH": f"{fake_bin}:{os.environ['PATH']}"}, check=False,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
-        arguments = (self.home / "systemd-run-args").read_text().splitlines()
+        arguments = (home / "systemd-run-args").read_text().splitlines()
         self.assertIn(f"--property=LoadCredentialEncrypted=runtime.env:{credential}", arguments)
-        self.assertIn(str(loader), arguments)
+        self.assertIn(str(loader).replace("$", "$$"), arguments)
         self.assertIn("--same-dir", arguments)
-        self.assertIn("--expand-environment=no", arguments)
-        self.assertEqual(arguments[-2:], [str(LAUNCHER_PATH), "help"])
+        self.assertNotIn("--expand-environment=no", arguments)
+        self.assertEqual(arguments[-4:], [str(LAUNCHER_PATH), "help", "$${LITERAL}", "$$$$"])
 
     def test_explicit_key_skips_encrypted_launcher(self):
         credential = self.home / ".config/credentials.encrypted/twitterapi-mcp-tunnel.env.cred"

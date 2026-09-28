@@ -115,7 +115,8 @@ class TimeoutReportingTests(unittest.TestCase):
 class LauncherCleanupTests(unittest.TestCase):
     def test_encrypted_launcher_preserves_stdin_and_arguments(self):
         with tempfile.TemporaryDirectory() as tmp:
-            home = Path(tmp)
+            home = Path(tmp) / "literal${HOME}"
+            home.mkdir()
             credential = home / ".config/credentials.encrypted/telegram-mcp-tunnel.env.cred"
             credential.parent.mkdir(parents=True)
             credential.touch()
@@ -137,8 +138,9 @@ class LauncherCleanupTests(unittest.TestCase):
             self.assertEqual(result.stdout, "piped marker\n")
             arguments = (home / "run.args").read_text().splitlines()
             self.assertIn("--same-dir", arguments)
-            self.assertIn("--expand-environment=no", arguments)
-            self.assertEqual(arguments[-3:], [str(SKILL_DIR / "scripts/telegram-cli"), "auth", "${LITERAL}"])
+            self.assertNotIn("--expand-environment=no", arguments)
+            self.assertIn(str(loader).replace("$", "$$"), arguments)
+            self.assertEqual(arguments[-3:], [str(SKILL_DIR / "scripts/telegram-cli"), "auth", "$${LITERAL}"])
 
     def test_explicit_credentials_skip_encrypted_launcher(self):
         with tempfile.TemporaryDirectory() as tmp:
