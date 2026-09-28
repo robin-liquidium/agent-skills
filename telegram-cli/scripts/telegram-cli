@@ -37,8 +37,10 @@ if [[ "${TELEGRAM_CLI_SECURE_REEXEC:-}" != "1" \
   cleanup() {
     if [[ "${run_done:-0}" != "1" ]]; then
       timeout 8s systemctl --user stop "$unit.service" >/dev/null 2>&1 || true
-      kill "$run_pid" 2>/dev/null || true
-      wait "$run_pid" 2>/dev/null || true
+      if [[ -n "${run_pid:-}" ]]; then
+        kill "$run_pid" 2>/dev/null || true
+        wait "$run_pid" 2>/dev/null || true
+      fi
     fi
   }
   trap cleanup EXIT
