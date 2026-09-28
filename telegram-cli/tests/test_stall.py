@@ -87,6 +87,23 @@ class DialogResolutionTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(client.cancelled)
         self.assertTrue(client.disconnected)
 
+    async def test_disconnect_timeout_preserves_command_result(self):
+        class SlowDisconnectClient(FakeClient):
+            async def get_dialogs(self, **kwargs):
+                return []
+
+            async def disconnect(self):
+                await asyncio.sleep(10)
+
+        client = SlowDisconnectClient([])
+        stderr = io.StringIO()
+        with patch.object(cli, "load_settings", return_value=None), \
+             patch.object(cli, "build_client", return_value=client), \
+             patch.object(cli, "DISCONNECT_TIMEOUT_SECONDS", 0.01), \
+             contextlib.redirect_stderr(stderr):
+            self.assertEqual(await cli.cmd_dialogs(SimpleNamespace(limit=1, archived=None, query=None)), 0)
+        self.assertIn("disconnect failed (TimeoutError)", stderr.getvalue())
+
     async def test_auth_is_not_subject_to_read_deadline(self):
         async def slow_auth(args, parser):
             await asyncio.sleep(0.03)

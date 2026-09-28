@@ -135,7 +135,7 @@ async def build_client(settings: Settings):
         if not await client.is_user_authorized():
             raise SystemExit("Telegram session is not authorized. Run auth first.")
     except BaseException:
-        await asyncio.wait_for(client.disconnect(), timeout=DISCONNECT_TIMEOUT_SECONDS)
+        await disconnect_client(client)
         raise
     return client
 
@@ -315,7 +315,10 @@ def dialog_search_score(row: dict[str, Any], query: str) -> int:
 
 
 async def disconnect_client(client: Any) -> None:
-    await asyncio.wait_for(client.disconnect(), timeout=DISCONNECT_TIMEOUT_SECONDS)
+    try:
+        await asyncio.wait_for(client.disconnect(), timeout=DISCONNECT_TIMEOUT_SECONDS)
+    except Exception as exc:
+        eprint(f"Telegram disconnect failed ({type(exc).__name__})")
 
 
 async def cmd_dialogs(args: argparse.Namespace) -> int:
