@@ -7,15 +7,19 @@ Each new CDP connection may make Helium show an "Allow remote debugging?" dialog
 
 ## Verify an attach worked
 
+This check requires Node.js with a global `WebSocket` (`node -p 'typeof WebSocket'` must print `function`).
+
 ```bash
 node -e '
 const fs = require("fs"), os = require("os"), path = require("path");
 const p = path.join(os.homedir(), "Library/Application Support/net.imput.helium/DevToolsActivePort");
 const [port, wsPath] = fs.readFileSync(p, "utf8").trim().split("\n").map(s => s.trim());
 const ws = new WebSocket(`ws://127.0.0.1:${port}${wsPath}`);
+const timer = setTimeout(() => { console.error("CDP response timed out"); ws.close(); process.exit(1); }, 45000);
 ws.onopen = () => ws.send(JSON.stringify({ id: 1, method: "Browser.getVersion" }));
-ws.onmessage = (e) => { console.log(e.data); process.exit(0); };
+ws.onmessage = (e) => { clearTimeout(timer); console.log(e.data); process.exit(0); };
 ws.onerror = (e) => { console.error("failed", e.message || e); process.exit(1); };
+ws.onclose = () => { console.error("CDP connection closed without a response"); process.exit(1); };
 '
 ```
 

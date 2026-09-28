@@ -5,8 +5,29 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 encrypted_credential="${HOME}/.config/credentials.encrypted/twitterapi-mcp-tunnel.env.cred"
 credential_loader="${HOME}/.local/libexec/with-systemd-env-credential"
+config_has_key=0
+if [[ -r "$encrypted_credential" && -r "${HOME}/.config/twitterapi-io/config.json" ]] && \
+  python3 - "${HOME}/.config/twitterapi-io/config.json" <<'PYCONFIG'
+import json
+import sys
+
+try:
+    value = json.load(open(sys.argv[1])).get("api_key")
+    valid = (isinstance(value, str) and bool(value.strip()) and "\n" not in value and "\r" not in value) or (
+        isinstance(value, dict)
+        and set(value) == {"$agent_secret"}
+        and isinstance(value["$agent_secret"], str)
+        and bool(value["$agent_secret"])
+    )
+except (OSError, ValueError, TypeError, AttributeError):
+    valid = False
+raise SystemExit(0 if valid else 1)
+PYCONFIG
+then
+  config_has_key=1
+fi
 if [[ "${TWITTERAPI_IO_SECURE_REEXEC:-}" != "1" \
-  && ! -r "${HOME}/.config/twitterapi-io/config.json" \
+  && "$config_has_key" != "1" \
   && -z "${TWITTERAPI_IO_KEY:-}" \
   && -r "$encrypted_credential" \
   && -x "$credential_loader" \

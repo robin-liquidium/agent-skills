@@ -163,6 +163,16 @@ class LauncherCleanupTests(unittest.TestCase):
             self.assertIn(str(loader).replace("$", "$$"), arguments)
             self.assertEqual(arguments[-3:], [str(SKILL_DIR / "scripts/telegram-cli"), "auth", "$${LITERAL}"])
 
+            config = home / ".config/telegram-cli/config.json"
+            config.parent.mkdir(parents=True)
+            config.write_text('{"api_id": 123, "api_hash": "hash"}')
+            result = subprocess.run([str(SKILL_DIR / "scripts/telegram-cli"), "messages", "--chat", "123"],
+                                    input="piped marker\n", text=True, capture_output=True, env=env, check=False)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout, "piped marker\n")
+            self.assertEqual((home / "run.args").read_text().splitlines()[-4:],
+                             [str(SKILL_DIR / "scripts/telegram-cli"), "messages", "--chat", "123"])
+
     def test_explicit_credentials_skip_encrypted_launcher(self):
         with tempfile.TemporaryDirectory() as tmp:
             home = Path(tmp)

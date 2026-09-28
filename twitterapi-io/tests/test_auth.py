@@ -80,6 +80,20 @@ class CredentialTests(unittest.TestCase):
             twitterapi_io.save_config({"api_key": "replacement-fake-key"})
         self.assertEqual(self.config_path.read_text(), original)
 
+    def test_malformed_vault_reference_cannot_be_replaced_with_plaintext(self):
+        original = json.dumps({"api_key": {"$agent_secret": ""}}) + "\n"
+        self.config_path.write_text(original)
+        result = subprocess.run(
+            ["bash", str(SETUP_PATH)], input="replacement-fake-key\n", text=True, capture_output=True,
+            env={**os.environ, "HOME": str(self.home)}, check=False,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.config_path.read_text(), original)
+        self.assertNotIn("replacement-fake-key", result.stdout + result.stderr)
+        with self.assertRaisesRegex(SystemExit, "Invalid agent-secrets reference"):
+            twitterapi_io.save_config({"api_key": "replacement-fake-key"})
+        self.assertEqual(self.config_path.read_text(), original)
+
     def test_curl_receives_secret_on_stdin_only(self):
         with mock.patch.object(twitterapi_io, "get_api_key", return_value="fake-api-key"), mock.patch.object(
             twitterapi_io.subprocess, "check_output", return_value=b'{"ok": true}'
@@ -171,6 +185,17 @@ class CredentialTests(unittest.TestCase):
         self.assertIn("--same-dir", arguments)
         self.assertNotIn("--expand-environment=no", arguments)
         self.assertEqual(arguments[-4:], [str(LAUNCHER_PATH), "help", "$${LITERAL}", "$$$$"])
+
+        (home / "systemd-run-args").unlink()
+        config = home / ".config/twitterapi-io/config.json"
+        config.parent.mkdir(parents=True)
+        config.write_text('{"api_key": ""}')
+        result = subprocess.run(
+            ["bash", "scripts/twitterapi-io", "help"], cwd=SKILL_DIR, text=True, capture_output=True,
+            env={**os.environ, "HOME": str(home), "PATH": f"{fake_bin}:{os.environ['PATH']}"}, check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue((home / "systemd-run-args").exists())
 
     def test_explicit_key_skips_encrypted_launcher(self):
         credential = self.home / ".config/credentials.encrypted/twitterapi-mcp-tunnel.env.cred"

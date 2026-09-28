@@ -42,7 +42,11 @@ def load_raw_config() -> dict[str, Any]:
 def save_config(data: dict[str, Any]) -> None:
     if CONFIG_PATH.exists():
         reference = json.loads(CONFIG_PATH.read_text()).get("api_key")
-        if isinstance(reference, dict) and set(reference) == {"$agent_secret"}:
+        if reference is not None and not isinstance(reference, (str, dict)):
+            raise SystemExit("Invalid saved TwitterAPI credential")
+        if isinstance(reference, dict):
+            if set(reference) != {"$agent_secret"} or not isinstance(reference["$agent_secret"], str) or not reference["$agent_secret"]:
+                raise SystemExit("Invalid agent-secrets reference")
             try:
                 result = subprocess.run(
                     [str(Path.home() / ".local/bin/secrets"), "set", reference["$agent_secret"], "--stdin"],

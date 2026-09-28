@@ -11,14 +11,28 @@ import sys
 from pathlib import Path
 
 path = Path(sys.argv[1])
-value = json.loads(path.read_text()).get("api_key") if path.exists() else None
-if isinstance(value, dict) and set(value) == {"$agent_secret"} and isinstance(value["$agent_secret"], str) and value["$agent_secret"]:
-    print(value["$agent_secret"])
-else:
-    raise SystemExit(1)
+try:
+    data = json.loads(path.read_text()) if path.exists() else {}
+    value = data.get("api_key")
+except (OSError, ValueError, AttributeError):
+    raise SystemExit(2)
+if isinstance(value, dict):
+    if set(value) == {"$agent_secret"} and isinstance(value["$agent_secret"], str) and value["$agent_secret"]:
+        print(value["$agent_secret"])
+        raise SystemExit(0)
+    raise SystemExit(2)
+if value is not None and not isinstance(value, str):
+    raise SystemExit(2)
+raise SystemExit(1)
 PYREF
  )"; then
   exec "$HOME/.local/bin/secrets" set "$reference"
+else
+  status=$?
+  if [ "$status" -ne 1 ]; then
+    printf "Invalid existing twitterapi-io config; refusing to replace its credential.\n" >&2
+    exit "$status"
+  fi
 fi
 
 mkdir -p "$config_dir"
