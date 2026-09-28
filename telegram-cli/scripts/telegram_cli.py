@@ -344,7 +344,8 @@ async def cmd_dialogs(args: argparse.Namespace) -> int:
 async def resolve_dialog(client: Any, chat: str) -> Any:
     needle = chat.strip()
     lowered = needle.lower()
-    numeric_id = int(needle) if needle.lstrip("-").isdigit() else None
+    digits = needle[1:] if needle.startswith("-") else needle
+    numeric_id = int(needle) if digits.isdigit() else None
     dialogs = []
     matches = []
     async for dialog in client.iter_dialogs(limit=2000, archived=None):

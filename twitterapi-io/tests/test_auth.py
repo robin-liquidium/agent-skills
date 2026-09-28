@@ -39,13 +39,18 @@ class CredentialTests(unittest.TestCase):
 
     def test_get_api_key_resolves_vault_reference(self):
         self.config_path.write_text(json.dumps({"api_key": {"$agent_secret": "test/twitter-key"}}))
-        completed = subprocess.CompletedProcess([], 0, stdout="fake-api-key")
+        completed = subprocess.CompletedProcess([], 0, stdout="fake-api-key\n")
         with mock.patch.dict(os.environ, {}, clear=True), mock.patch.object(
             twitterapi_io.subprocess, "run", return_value=completed
         ) as run, mock.patch.object(twitterapi_io.Path, "home", return_value=self.home):
             self.assertEqual(twitterapi_io.get_api_key(), "fake-api-key")
         self.assertEqual(run.call_args.args[0], [str(self.home / ".local/bin/secrets"), "get", "test/twitter-key"])
         self.assertEqual(run.call_args.kwargs["timeout"], 15)
+
+    def test_get_api_key_rejects_embedded_newline(self):
+        with mock.patch.dict(os.environ, {"TWITTERAPI_IO_KEY": "fake-key\nx-evil: 1"}, clear=True), \
+             self.assertRaisesRegex(SystemExit, "Invalid TwitterAPI key"):
+            twitterapi_io.get_api_key()
 
     def test_get_api_key_vault_timeout_uses_existing_error(self):
         self.config_path.write_text(json.dumps({"api_key": {"$agent_secret": "test/twitter-key"}}))

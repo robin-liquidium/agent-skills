@@ -75,8 +75,12 @@ def get_api_key() -> str:
         if result.returncode:
             raise SystemExit("Cannot load TwitterAPI credential from agent-secrets")
         key = result.stdout
+    if isinstance(key, str):
+        key = key.strip()
     if not key:
         raise SystemExit("Missing TWITTERAPI_IO_KEY. Set the env var or run scripts/setup-api-key.sh.")
+    if not isinstance(key, str) or "\n" in key or "\r" in key:
+        raise SystemExit("Invalid TwitterAPI key")
     return key
 
 

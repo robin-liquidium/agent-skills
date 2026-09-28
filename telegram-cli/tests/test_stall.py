@@ -76,6 +76,10 @@ class DialogResolutionTests(unittest.IsolatedAsyncioTestCase):
         client = FakeClient([dialog(1, "12345")])
         self.assertEqual((await cli.resolve_dialog(client, "12345")).id, 1)
 
+    async def test_multiple_leading_dashes_are_treated_as_name(self):
+        client = FakeClient([dialog(1, "--5")])
+        self.assertEqual((await cli.resolve_dialog(client, "--5")).id, 1)
+
     async def test_deadline_cancels_read_and_disconnects(self):
         client = FakeClient([dialog(123, "target")])
         with patch.object(cli, "load_settings", return_value=None), \
