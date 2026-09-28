@@ -1,6 +1,6 @@
 ---
 name: imagemagick
-description: "ImageMagick `magick` workflows: resize, convert, composite, compress, inspect."
+description: "Edit, convert, resize, composite, inspect, and compress raster images with ImageMagick CLI."
 ---
 
 # ImageMagick CLI
@@ -8,12 +8,12 @@ description: "ImageMagick `magick` workflows: resize, convert, composite, compre
 ## Overview
 
 Use ImageMagick’s `magick` CLI to perform deterministic image transforms and batch processing.
-When choosing options or flags, consult `references/imagemagick-cli.md` first; use other references for task-specific depth.
+Use the quick-start examples for common operations. When option syntax or behavior is unclear, consult the relevant section of `references/imagemagick-cli.md`; load other references only for the task-specific details needed.
 
 Default preferences:
 - Prefer `magick ... output.ext` for safe “read → transform → write”.
 - Use `magick mogrify` only when you explicitly want in-place edits (or use `-path out/`).
-- For any image you touch, capture file size before and after, and report the before/after sizes plus percent reduction.
+- For compression or file-size optimization tasks, or when the user requests size comparisons, capture file size before and after and report both sizes plus percent reduction.
 
 ## Quick Start (most common)
 
@@ -42,6 +42,7 @@ magick input.jpg -auto-orient -resize "2048x2048>" -colorspace sRGB -quality 45 
 - Use `magick ... output.ext` for safe transforms that preserve the input file.
 - Use `magick mogrify ... *.ext` for bulk edits; it can overwrite originals.
 - Use `magick identify` to inspect images or extract metadata (scriptable output).
+- Use `magick compare` for image differences.
 - Use `magick montage` for contact sheets / grids.
 - Use `magick composite` for overlaying images (watermarks, badges).
 
@@ -87,7 +88,7 @@ For a geometry cheat sheet and “cover/crop/letterbox” patterns, read `refere
 
 ## References (read when needed)
 
-- `references/imagemagick-cli.md`: preferred, comprehensive CLI reference (read first for syntax, options, and command behavior).
+- `references/imagemagick-cli.md`: comprehensive CLI reference; consult relevant sections when syntax, options, or command behavior need clarification.
 - `references/recipes.md`: practical commands for common tasks (web, overlays, montage, batch).
 - `references/avif.md`: AVIF/HEIC-specific recipes + tuning knobs.
 - `references/geometry.md`: geometry operators and cropping/extent patterns.

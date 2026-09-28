@@ -1,6 +1,6 @@
 ---
 name: twitterapi-io
-description: "twitterapi.io fetch: tweets, profiles, replies, quotes, threads, search."
+description: "Retrieve and paginate X/Twitter profiles, tweets, replies, quotes, threads, mentions, and searches through twitterapi.io."
 allowed-tools: Bash(./scripts/twitterapi-io:*)
 ---
 
@@ -8,7 +8,7 @@ allowed-tools: Bash(./scripts/twitterapi-io:*)
 
 Use the local skill script for read-only twitterapi.io access.
 
-This skill exists to make common twitterapi.io reads simple and low-noise instead of rebuilding custom API calls each time.
+The config can hold an `agent-secrets` reference instead of a plaintext key. The CLI resolves the reference at runtime, and setup/auth rotates an existing reference in the vault. The optional Linux launcher can use a systemd encrypted credential. Never paste real keys into command arguments.
 
 ## Quick rules
 
@@ -35,13 +35,15 @@ Primary config path:
 ~/.config/twitterapi-io/config.json
 ```
 
+On a Linux host with `~/.config/credentials.encrypted/twitterapi-mcp-tunnel.env.cred`, the launcher can load the key through a `with-systemd-env-credential` helper. This optional host setup does not require a plaintext config.
+
 Recommended one-time setup:
 
 ```bash
 <skill-path>/scripts/setup-api-key.sh
 ```
 
-That writes the API key to the config file so later reads work without needing to source `.env`.
+That saves the key to the config file, or rotates the existing vault entry if the config contains an `api_key` object such as `{"$agent_secret":"tools/twitterapi-io/api-key"}`. The local `secrets` CLI must be available for vault-backed config.
 
 ## Commands
 
@@ -51,18 +53,9 @@ That writes the API key to the config file so later reads work without needing t
 <skill-path>/scripts/twitterapi-io help
 ```
 
-### Authenticate once
+### Alternative credentials
 
-```bash
-<skill-path>/scripts/setup-api-key.sh
-```
-
-You can also use env as an override or fallback, or use `auth --api-key` only when command-history exposure is acceptable:
-
-```bash
-export TWITTERAPI_IO_KEY='YOUR_KEY'
-<skill-path>/scripts/twitterapi-io auth --api-key YOUR_KEY
-```
+`TWITTERAPI_IO_KEY` overrides saved config. The `auth --api-key` command is also available, but its argument can appear in shell history and process listings; prefer the interactive setup script.
 
 ### Fetch one tweet
 
@@ -154,9 +147,6 @@ Use explicit unix-time operators when needed:
 
 The CLI returns JSON. Parse it instead of scraping human text.
 
-Default output is compact and low-noise.
-Use `--raw` when full endpoint payloads are actually needed.
-
 ## Files
 
 - Package repo: `https://github.com/robin-liquidium/twitterapi-io-cli`
@@ -164,7 +154,7 @@ Use `--raw` when full endpoint payloads are actually needed.
 - Python implementation: `scripts/twitterapi_io.py`
 - Credential setup helper: `scripts/setup-api-key.sh`
 - Official docs links: `references/links.md`
-- Config storage: `~/.config/twitterapi-io/config.json`
+- Config storage: `~/.config/twitterapi-io/config.json`, or the host's systemd encrypted credential when configured
 - `.env` is optional fallback only; it is not the preferred long-term setup.
 
 ## When to stop and ask

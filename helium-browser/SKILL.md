@@ -1,6 +1,6 @@
 ---
 name: helium-browser
-description: Attach agent browser tooling (playwright-cli, chrome-devtools-mcp) to a running Helium browser with the user's real profile. Use when working with the Helium browser, when playwright-cli or chrome-devtools-mcp should control an already-open browser instead of launching a fresh instance, when a CDP/remote-debugging attach fails against Helium, or when HTTP /json endpoints 404 on a Chromium debug port. Covers the WebSocket-only debug server, DevToolsActivePort discovery, and per-platform profile paths.
+description: "Attach browser tools to a running Helium profile; troubleshoot WebSocket-only CDP discovery, permissions, and failed attachments."
 ---
 
 # Helium Browser
@@ -67,6 +67,11 @@ Notes:
 - `playwright-cli open --profile=<helium user-data dir>` cannot reuse the profile while Helium is running (Chromium profile lock). Attach is the only way to control the live browser.
 - The `-s=helium` session name is a convention; any name works, but a stable one makes scripts idempotent.
 
+## Connection permissions
+
+New macOS CDP connections prompt “Allow remote debugging?” and time out in about 30 seconds. The user must approve the prompt directly. Read [connection diagnostics](references/connection-diagnostics.md) for prompt troubleshooting, raw WebSocket checks, and a wedged server.
+
+
 ## chrome-devtools-mcp: attach to the running Helium
 
 `chrome-devtools-mcp` v1.2+ reads `DevToolsActivePort` itself when given `--autoConnect --userDataDir`, so a static MCP client config works across restarts (macOS example):
@@ -94,21 +99,6 @@ Notes:
 - If it fails with `Could not connect ... DevToolsActivePort`, re-toggle `helium://inspect/#remote-debugging`.
 - Avoid `--executablePath` alone: that launches a separate Helium instance with an isolated throwaway profile instead of attaching to the running one.
 
-## Verify an attach worked
-
-```bash
-node -e '
-const fs = require("fs"), os = require("os"), path = require("path");
-const p = path.join(os.homedir(), "Library/Application Support/net.imput.helium/DevToolsActivePort");
-const [port, wsPath] = fs.readFileSync(p, "utf8").trim().split("\n").map(s => s.trim());
-const ws = new WebSocket(`ws://127.0.0.1:${port}${wsPath}`);
-ws.onopen = () => ws.send(JSON.stringify({ id: 1, method: "Browser.getVersion" }));
-ws.onmessage = (e) => { console.log(e.data); process.exit(0); };
-ws.onerror = (e) => { console.error("failed", e.message || e); process.exit(1); };
-'
-```
-
-A `Browser.getVersion` response means the debug server is reachable and attachable.
 
 ## Security note
 

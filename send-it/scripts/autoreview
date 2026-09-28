@@ -783,7 +783,7 @@ TEST_ENV_ALLOWED_EXACT = {
 }
 TEST_ENV_ALLOWED_PREFIXES = ("AUTOREVIEW_FAKE_", "LC_")
 DEFAULT_MODEL_BY_ENGINE = {
-    "codex": "gpt-5.6-sol",
+    "codex": "gpt-6-astra",
     "claude": "claude-fable-5",
 }
 DEFAULT_CODEX_ACCESS_FALLBACK_MODEL = "gpt-5.6-terra"
@@ -9303,6 +9303,7 @@ def render_review_prompt(
 
         Hard rules:
         - Return exactly one JSON object and nothing else. Do not wrap it in Markdown.
+        - When repository access is enabled, use the available read-only tools to inspect the repository before returning. Finish any permitted inspection before returning the JSON; do not return a draft or promise further investigation. Put every actionable defect in findings, not only in the overall explanation.
         - The JSON object must match this schema exactly:
         {json.dumps(SCHEMA, indent=2)}
         - Do not modify files.
@@ -9314,6 +9315,7 @@ def render_review_prompt(
         - Shell commands, if available, must be read-only inspection commands. Do not run tests, formatters, package installs, generators, network mutation commands, git mutation commands, or commands that write files.
         - Report only actionable defects introduced or exposed by this change.
         - Prefer high-signal findings over style feedback.
+        - Assign severity by impact: P0 is a universal critical emergency, P1 is urgent, P2 is a normal actionable bug, and P3 is minor. Do not inflate severity to meet the reporting threshold.
         - Report EVERY distinct actionable defect in this single pass, ordered most severe first. Each review round costs the caller a full fix-test-review cycle; withholding a known defect until a later round wastes one.
         - Before returning, sweep the bundle once more for independent defects in other files or failure modes that you may have stopped scanning for after an earlier find.
         - Include security findings: injection, secret leaks, authz/authn bypass, path traversal, unsafe deserialization, unsafe filesystem or shell use, privacy leaks, and credential handling.
@@ -9459,6 +9461,32 @@ def toml_inline_string_table(values: dict[str, str]) -> str:
     return "{" + entries + "}"
 
 
+def codex_linux_runtime_flags(repo: Path, executable: str) -> list[str]:
+    if sys.platform != "linux":
+        return []
+    binary = Path(executable).resolve()
+    # The official npm launcher delegates to a platform package. Resolve its
+    # native executable without granting read access to the whole installation.
+    if binary.name == "codex.js" and binary.parent.name == "bin":
+        package = binary.parent.parent
+        try:
+            name = json.loads((package / "package.json").read_text()).get("name")
+        except (OSError, ValueError):
+            name = None
+        arch = {"x86_64": "x64", "aarch64": "arm64"}.get(os.uname().machine)
+        if name != "@openai/codex" or arch is None:
+            return []
+        binary = (package / "node_modules" / "@openai" / f"codex-linux-{arch}"
+                  / "vendor" / f"{os.uname().machine}-unknown-linux-musl" / "bin" / "codex").resolve()
+    if not external_env_path(repo, str(binary)) or not binary.is_file() or not os.access(binary, os.X_OK):
+        return []
+    with binary.open("rb") as stream:
+        if stream.read(4) != b"\x7fELF":
+            return []
+    return ["-c", 'permissions.autoreview.filesystem={":minimal"="read",":workspace_roots"="read",'
+            + f'{toml_quoted_key_segment(str(binary))}="read"' + "}"]
+
+
 def codex_config_isolation_flags(repo: Path, runtime_root: Path) -> list[str]:
     tool_env = toml_inline_string_table(codex_tool_git_env())
     state_home = runtime_root / "state"
@@ -9525,7 +9553,7 @@ def parse_codex_auth_config_fallback(text: str) -> dict[str, Any]:
         if line.startswith("["):
             break
         match = re.fullmatch(
-            r"(cli_auth_credentials_store|forced_login_method|forced_chatgpt_workspace_id)\s*=\s*(.+)",
+            r"(cli_auth_credentials_store|forced_login_method|forced_chatgpt_workspace_id|openai_base_url|model_catalog_json)\s*=\s*(.+)",
             line,
         )
         if not match:
@@ -9650,6 +9678,64 @@ def prepare_codex_runtime_auth(
 
 def codex_exec_isolation_flags() -> list[str]:
     return ["--ignore-user-config", "--ignore-rules", "--skip-git-repo-check"]
+
+
+def codex_opencodex_flags(
+    args: argparse.Namespace, repo: Path, runtime_root: Path, model: str | None
+) -> list[str]:
+    if not getattr(args, "codex_opencodex", False):
+        return []
+    source_home = codex_source_home(repo)
+    if source_home is None or not model or "/" not in model:
+        raise SystemExit("--codex-opencodex requires an external Codex home and an explicit provider/model")
+    config_path = (source_home / "config.toml").resolve()
+    if not external_env_path(repo, str(config_path)):
+        raise SystemExit("OpenCodex user config must be outside the reviewed repository")
+    config = load_codex_auth_config(config_path)
+    endpoint = config.get("openai_base_url")
+    if not isinstance(endpoint, str):
+        raise SystemExit("OpenCodex routing requires openai_base_url in the user Codex config")
+    url = urllib.parse.urlsplit(endpoint)
+    if url.path.rstrip("/") == "/backend-api/codex":
+        realtime_endpoint = config.get("experimental_realtime_ws_base_url")
+        if isinstance(realtime_endpoint, str):
+            realtime_url = urllib.parse.urlsplit(realtime_endpoint)
+            if realtime_url.scheme == url.scheme and realtime_url.netloc == url.netloc:
+                endpoint, url = realtime_endpoint, realtime_url
+    if (
+        url.scheme != "http"
+        or url.hostname not in {"127.0.0.1", "localhost", "::1"}
+        or url.username is not None
+        or url.password is not None
+        or url.path.rstrip("/") != "/v1"
+        or url.query
+        or url.fragment
+    ):
+        raise SystemExit("OpenCodex review requires a local HTTP loopback /v1 endpoint without credentials")
+    catalog_value = config.get("model_catalog_json")
+    if not isinstance(catalog_value, str) or not Path(catalog_value).is_absolute():
+        raise SystemExit("OpenCodex routing requires an absolute model_catalog_json in the user Codex config")
+    catalog_path = Path(catalog_value).resolve()
+    if not external_env_path(repo, str(catalog_path)):
+        raise SystemExit("OpenCodex model catalog must be outside the reviewed repository")
+    try:
+        data, truncated = read_prefix(catalog_path, 8_000_000)
+        catalog = json.loads(data)
+    except (OSError, ValueError) as exc:
+        raise SystemExit("unable to read the OpenCodex model catalog") from exc
+    if truncated or not isinstance(catalog, dict) or not isinstance(catalog.get("models"), list):
+        raise SystemExit("invalid or oversized OpenCodex model catalog")
+    selected = [item for item in catalog["models"] if isinstance(item, dict) and item.get("slug") == model]
+    if len(selected) != 1:
+        raise SystemExit(f"OpenCodex model is missing or ambiguous in the catalog: {model}")
+    # Freeze only the selected model's metadata; never load the rest of user config.
+    frozen_catalog = runtime_root / "opencodex-catalog.json"
+    frozen_catalog.write_text(json.dumps({"models": selected}))
+    return [
+        "-c", 'model_provider="openai"',
+        "-c", f"openai_base_url={json.dumps(endpoint)}",
+        "-c", f"model_catalog_json={json.dumps(str(frozen_catalog))}",
+    ]
 
 
 def claude_review_isolation_flags() -> list[str]:
@@ -9884,18 +9970,21 @@ def codex_command(
     if speed_override is not None:
         cmd.extend(["-c", speed_override])
     cmd.extend(codex_config_isolation_flags(review_root, runtime_root))
+    cmd.extend(codex_linux_runtime_flags(source_repo, cmd[0]))
     cmd.extend(codex_auth_config_flags(source_repo, force_file=force_file_auth))
+    cmd.extend(codex_opencodex_flags(args, source_repo, runtime_root, model))
     cmd.append("exec")
-    if args.stream_engine_output:
-        cmd.append("--json")
+    cmd.append("--json")
+    # Routed Kimi/Grok can finalize before tool inspection when response_format
+    # is enforced. The prompt still specifies SCHEMA and the host validates it.
+    if not getattr(args, "codex_opencodex", False):
+        cmd.extend(["--output-schema", str(schema_path)])
     cmd.extend(
         [
             *codex_exec_isolation_flags(),
             "--ephemeral",
             "-C",
             str(review_root),
-            "--output-schema",
-            str(schema_path),
             "--output-last-message",
             str(output_path),
             "-",
@@ -9970,6 +10059,43 @@ def run_codex(args: argparse.Namespace, repo: Path, prompt: str) -> str:
                     model,
                     force_file_auth=file_auth_linked,
                 )
+                engine_env = safe_engine_env(
+                    repo,
+                    [Path(cmd[0]).parent],
+                    engine="codex",
+                    extra={
+                        "HOME": str(runtime_home),
+                        "USERPROFILE": str(runtime_home),
+                        "XDG_CACHE_HOME": str(runtime_cache),
+                        "XDG_CONFIG_HOME": str(runtime_config),
+                        "XDG_DATA_HOME": str(runtime_data),
+                        "XDG_STATE_HOME": str(runtime_state),
+                        # Keyring namespaces are derived from canonical CODEX_HOME.
+                        # Linked file auth uses the isolated home; keyring/auto must
+                        # retain the source namespace until Codex supports an auth split.
+                        "CODEX_HOME": str(active_codex_home),
+                    },
+                )
+                if getattr(args, "codex_opencodex", False):
+                    # Never send local provider traffic or its authorization through
+                    # an inherited proxy. NO_PROXY also bypasses system proxies.
+                    for key in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"):
+                        engine_env.pop(key, None)
+                    engine_env["NO_PROXY"] = "*"
+                    engine_env["no_proxy"] = "*"
+                if index == 0 and getattr(args, "repo_access", False) and sys.platform in {"darwin", "linux"}:
+                    probe = run(
+                        [cmd[0], "sandbox", *codex_config_isolation_flags(review_root, runtime_root),
+                         *codex_linux_runtime_flags(repo, cmd[0]),
+                         "-P", "autoreview", "-C", str(review_root), "--", "/bin/pwd"],
+                        review_root, check=False, env=engine_env,
+                    )
+                    if probe.returncode != 0 or probe.stdout.strip() != str(review_root.resolve()):
+                        raise SystemExit(
+                            "Codex repository sandbox preflight failed; review was not started. "
+                            "Repair the host sandbox without disabling it.\n"
+                            + (probe.stderr or probe.stdout)[:2000]
+                        )
                 result = run_with_heartbeat(
                     cmd,
                     review_root,
@@ -9977,27 +10103,39 @@ def run_codex(args: argparse.Namespace, repo: Path, prompt: str) -> str:
                     label="codex",
                     stream_output=args.stream_engine_output,
                     stream_display=CodexStreamDisplay() if args.stream_engine_output else None,
-                    env=safe_engine_env(
-                        repo,
-                        [Path(cmd[0]).parent],
-                        engine="codex",
-                        extra={
-                            "HOME": str(runtime_home),
-                            "USERPROFILE": str(runtime_home),
-                            "XDG_CACHE_HOME": str(runtime_cache),
-                            "XDG_CONFIG_HOME": str(runtime_config),
-                            "XDG_DATA_HOME": str(runtime_data),
-                            "XDG_STATE_HOME": str(runtime_state),
-                            # Keyring namespaces are derived from canonical CODEX_HOME.
-                            # Linked file auth uses the isolated home; keyring/auto must
-                            # retain the source namespace until Codex supports an auth split.
-                            "CODEX_HOME": str(active_codex_home),
-                        },
-                    ),
+                    env=engine_env,
                     resolve_root=repo,
                 )
                 output = output_path.read_text()
                 if result.returncode == 0:
+                    if getattr(args, "repo_access", False):
+                        tool_completed = False
+                        for line in result.stdout.splitlines():
+                            try:
+                                event = json.loads(line)
+                            except ValueError:
+                                continue
+                            if not isinstance(event, dict):
+                                continue
+                            item = event.get("item")
+                            if (event.get("type") == "item.completed" and isinstance(item, dict)
+                                and item.get("type") == "command_execution" and item.get("exit_code") == 0):
+                                tool_completed = True
+                        if not tool_completed:
+                            raise SystemExit("Codex returned without successful shell-tool execution; repository review is incomplete")
+                    if getattr(args, "codex_opencodex", False) and output:
+                        # These providers sometimes prefix the final JSON with prose.
+                        # Accept only a complete trailing object; normal schema and
+                        # finding-location validation still runs in run_reviewer.
+                        start = output.find("{")
+                        if start > 0:
+                            try:
+                                parsed = json.loads(output[start:])
+                            except ValueError:
+                                pass
+                            else:
+                                if isinstance(parsed, dict):
+                                    output = json.dumps(parsed)
                     return output or result.stdout
                 if (
                     index == 0
@@ -11858,12 +11996,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--base")
     parser.add_argument("--commit", default="HEAD")
     parser.add_argument("--engine", choices=ENGINE_CHOICES, default=os.environ.get("AUTOREVIEW_ENGINE", "codex"))
-    parser.add_argument("--reviewers", help="Comma-separated review panel, e.g. codex,claude,pi or codex:gpt-5.6-sol:high.")
+    parser.add_argument("--reviewers", help="Comma-separated review panel, e.g. codex,claude,pi or codex:gpt-6-astra:high.")
     parser.add_argument("--panel", action="store_true", help="Run a Codex/Claude review panel unless --engine changes the first reviewer.")
     parser.add_argument(
         "--model",
         action="append",
-        help="Model for all reviewers or engine=model. Repeatable. Defaults: codex=gpt-5.6-sol with an access-only gpt-5.6-terra retry, claude=claude-fable-5.",
+        help="Model for all reviewers or engine=model. Repeatable. Defaults: codex=gpt-6-astra with an access-only gpt-5.6-terra retry, claude=claude-fable-5.",
     )
     parser.add_argument("--thinking", action="append", help="Thinking/effort for all reviewers or engine=level. Repeatable. Codex: none, minimal, low, medium, high, xhigh, max. Claude: low, medium, high, xhigh, max. Droid: off, none, low, medium, high. Pi: off, minimal, low, medium, high, xhigh. OpenCode: minimal, low, medium, high, max. Cursor: none.")
     parser.add_argument(
@@ -11873,6 +12011,11 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--allow-partial-panel", action="store_true", help="Continue panel output when one reviewer fails.")
     parser.add_argument("--codex-bin", default=os.environ.get("CODEX_BIN", "codex"))
+    parser.add_argument(
+        "--codex-opencodex",
+        action="store_true",
+        help="Route an explicit provider/model through the local OpenCodex endpoint and catalog from user Codex config; retain review isolation.",
+    )
     parser.add_argument(
         "--codex-config",
         action="append",
@@ -11906,7 +12049,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--repo-access",
         action="store_true",
-        help="give the reviewer read-only repository access (read/grep/glob; codex and opencode engines only) so it can verify callers, imports, and surrounding code; findings must still target the change bundle",
+        help="give the reviewer read-only repository access (read/grep/glob; codex and opencode engines only); Codex additionally requires successful shell-tool execution; verify callers, imports, and surrounding code; findings must still target the change bundle",
     )
     parser.add_argument(
         "--claude-allowed-tools",
@@ -12088,6 +12231,8 @@ def reviewer_args(args: argparse.Namespace) -> list[argparse.Namespace]:
         raise SystemExit("--codex-config is only supported for codex; no codex reviewer selected")
     if getattr(args, "codex_speed", None) and "codex" not in selected_engines:
         raise SystemExit("--codex-speed is only supported for codex; no codex reviewer selected")
+    if getattr(args, "codex_opencodex", False) and selected_engines != {"codex"}:
+        raise SystemExit("--codex-opencodex requires a single Codex reviewer")
 
     seen: set[str] = set()
     result: list[argparse.Namespace] = []
@@ -12318,16 +12463,16 @@ def self_test_config_defaults() -> None:
         for key in keys:
             os.environ.pop(key, None)
         default_codex = reviewer_args(reviewer_test_args(engine="codex"))[0]
-        if default_codex.model != "gpt-5.6-sol":
+        if default_codex.model != "gpt-6-astra":
             raise SystemExit(f"self-test config defaults failed: default codex model={default_codex.model!r}")
         if default_codex.fallback_model != "gpt-5.6-terra":
             raise SystemExit(
                 f"self-test config defaults failed: default codex fallback={default_codex.fallback_model!r}"
             )
-        explicit_sol = reviewer_args(reviewer_test_args(engine="codex", model=["gpt-5.6-sol"]))[0]
-        if explicit_sol.fallback_model != "gpt-5.6-terra":
+        explicit_astra = reviewer_args(reviewer_test_args(engine="codex", model=["gpt-6-astra"]))[0]
+        if explicit_astra.fallback_model != "gpt-5.6-terra":
             raise SystemExit(
-                f"self-test config defaults failed: explicit Sol access fallback={explicit_sol.fallback_model!r}"
+                f"self-test config defaults failed: explicit Astra access fallback={explicit_astra.fallback_model!r}"
             )
         if default_codex.thinking != "high":
             raise SystemExit(f"self-test config defaults failed: default codex thinking={default_codex.thinking!r}")
@@ -12618,6 +12763,8 @@ def main() -> int:
         if reviewers[0].thinking:
             print(f"thinking: {reviewers[0].thinking}")
         if reviewers[0].engine == "codex":
+            if getattr(reviewers[0], "codex_opencodex", False):
+                print("route: local OpenCodex")
             config_keys = codex_config_keys(reviewers[0])
             if config_keys:
                 print(f"codex_config_keys: {', '.join(config_keys)}")
@@ -12775,7 +12922,9 @@ def main() -> int:
         return 1
     if args.expect_findings:
         return 0 if has_findings else 1
-    return 1 if has_findings or overall_incorrect else 0
+    if has_findings:
+        return 2
+    return 1 if overall_incorrect else 0
 
 
 def sanitized_main() -> int:

@@ -30,6 +30,20 @@ def load_helper() -> dict[str, object]:
     return runpy.run_path(str(SCRIPT), run_name="autoreview_under_test")
 
 
+def working_java() -> str | None:
+    java = shutil.which("java")
+    if java is None:
+        return None
+    try:
+        result = subprocess.run(
+            [java, "-version"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            check=False, timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return java if result.returncode == 0 else None
+
+
 def git(repo: Path, *args: str) -> str:
     env = os.environ.copy()
     env.update(
@@ -5515,7 +5529,7 @@ class AutoreviewHardeningTests(unittest.TestCase):
                 os.environ.update(old)
 
     def test_parallel_test_environment_isolates_jvm_user_home(self) -> None:
-        java = shutil.which("java")
+        java = working_java()
         if java is None:
             self.skipTest("java is not installed")
         with tempfile.TemporaryDirectory() as tempdir:
@@ -5567,7 +5581,7 @@ class AutoreviewHardeningTests(unittest.TestCase):
         )
 
     def test_java_tool_option_quote_round_trips_special_paths(self) -> None:
-        java = shutil.which("java")
+        java = working_java()
         if java is None:
             self.skipTest("java is not installed")
         names = ["space home", "apostrophe's home"]

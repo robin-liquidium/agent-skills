@@ -4,7 +4,6 @@ import asyncio
 import getpass
 import json
 import os
-import subprocess
 import stat
 import sys
 from dataclasses import dataclass
@@ -16,6 +15,8 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 SKILL_DIR = SCRIPT_DIR.parent
 LOCAL_VENV_PYTHON = Path.home() / ".cache" / "telegram-cli" / "venv" / "bin" / "python"
 BOOTSTRAP_SCRIPT = SCRIPT_DIR / "bootstrap_venv.sh"
+OPERATION_TIMEOUT_SECONDS = 60
+DISCONNECT_TIMEOUT_SECONDS = 5
 
 
 def maybe_reexec_local_venv() -> None:
@@ -27,10 +28,7 @@ def maybe_reexec_local_venv() -> None:
         return
     env = dict(os.environ)
     env["TELEGRAM_CLI_VENV_REEXEC"] = "1"
-    raise SystemExit(subprocess.call([str(LOCAL_VENV_PYTHON), __file__, *sys.argv[1:]], env=env))
-
-
-maybe_reexec_local_venv()
+    os.execve(str(LOCAL_VENV_PYTHON), [str(LOCAL_VENV_PYTHON), __file__, *sys.argv[1:]], env)
 
 CONFIG_DIR = Path.home() / ".config" / "telegram-cli"
 CONFIG_PATH = CONFIG_DIR / "config.json"
@@ -132,9 +130,13 @@ async def build_client(settings: Settings):
         settings.api_hash,
         receive_updates=False,
     )
-    await client.connect()
-    if not await client.is_user_authorized():
-        raise SystemExit("Telegram session is not authorized. Run auth first.")
+    try:
+        await client.connect()
+        if not await client.is_user_authorized():
+            raise SystemExit("Telegram session is not authorized. Run auth first.")
+    except BaseException:
+        await asyncio.wait_for(client.disconnect(), timeout=DISCONNECT_TIMEOUT_SECONDS)
+        raise
     return client
 
 
@@ -312,6 +314,10 @@ def dialog_search_score(row: dict[str, Any], query: str) -> int:
     return score
 
 
+async def disconnect_client(client: Any) -> None:
+    await asyncio.wait_for(client.disconnect(), timeout=DISCONNECT_TIMEOUT_SECONDS)
+
+
 async def cmd_dialogs(args: argparse.Namespace) -> int:
     settings = load_settings()
     client = await build_client(settings)
@@ -329,19 +335,22 @@ async def cmd_dialogs(args: argparse.Namespace) -> int:
         print(json.dumps(data, indent=2, ensure_ascii=False))
         return 0
     finally:
-        await client.disconnect()
+        await disconnect_client(client)
 
 
 async def resolve_dialog(client: Any, chat: str) -> Any:
     needle = chat.strip()
     lowered = needle.lower()
-    dialogs = await client.get_dialogs(limit=500, archived=None)
-
+    numeric_id = int(needle) if needle.lstrip("-").isdigit() else None
+    dialogs = []
     matches = []
-    for dialog in dialogs:
-        row = dialog_to_dict(dialog)
-        if needle == str(row.get("id")):
+    async for dialog in client.iter_dialogs(limit=2000, archived=None):
+        if numeric_id is not None and dialog.id == numeric_id:
             return dialog
+        dialogs.append(dialog)
+        if numeric_id is not None:
+            continue
+        row = dialog_to_dict(dialog)
         for candidate in (row.get("name"), row.get("title"), row.get("username")):
             if candidate and lowered == str(candidate).lower():
                 matches.append(dialog)
@@ -381,7 +390,7 @@ async def cmd_messages(args: argparse.Namespace) -> int:
         print(json.dumps(data, indent=2, ensure_ascii=False))
         return 0
     finally:
-        await client.disconnect()
+        await disconnect_client(client)
 
 
 async def cmd_search(args: argparse.Namespace) -> int:
@@ -396,7 +405,7 @@ async def cmd_search(args: argparse.Namespace) -> int:
         print(json.dumps(results, indent=2, ensure_ascii=False))
         return 0
     finally:
-        await client.disconnect()
+        await disconnect_client(client)
 
 
 async def cmd_unread_dialogs(args: argparse.Namespace) -> int:
@@ -420,7 +429,7 @@ async def cmd_unread_dialogs(args: argparse.Namespace) -> int:
         print(json.dumps(items[: args.limit], indent=2, ensure_ascii=False))
         return 0
     finally:
-        await client.disconnect()
+        await disconnect_client(client)
 
 
 async def cmd_send(args: argparse.Namespace) -> int:
@@ -461,7 +470,7 @@ async def cmd_send(args: argparse.Namespace) -> int:
         }, indent=2, ensure_ascii=False))
         return 0
     finally:
-        await client.disconnect()
+        await disconnect_client(client)
 
 
 async def cmd_mark_read(args: argparse.Namespace) -> int:
@@ -493,7 +502,7 @@ async def cmd_mark_read(args: argparse.Namespace) -> int:
         }, indent=2, ensure_ascii=False))
         return 0
     finally:
-        await client.disconnect()
+        await disconnect_client(client)
 
 
 async def cmd_archive(args: argparse.Namespace) -> int:
@@ -519,7 +528,7 @@ async def cmd_archive(args: argparse.Namespace) -> int:
         }, indent=2, ensure_ascii=False))
         return 0
     finally:
-        await client.disconnect()
+        await disconnect_client(client)
 
 
 async def cmd_mute(args: argparse.Namespace) -> int:
@@ -552,7 +561,7 @@ async def cmd_mute(args: argparse.Namespace) -> int:
         }, indent=2, ensure_ascii=False))
         return 0
     finally:
-        await client.disconnect()
+        await disconnect_client(client)
 
 
 def cmd_help(args: argparse.Namespace) -> int:
@@ -678,9 +687,7 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
-async def async_main() -> int:
-    parser = build_parser()
-    args = parser.parse_args()
+async def run_command(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     if args.command == "auth":
         return await cmd_auth(args)
     if args.command == "dialogs":
@@ -709,9 +716,24 @@ async def async_main() -> int:
     return 2
 
 
+async def async_main() -> int:
+    parser = build_parser()
+    args = parser.parse_args()
+    if args.command in ("auth", "help"):
+        return await run_command(args, parser)
+    return await asyncio.wait_for(run_command(args, parser), timeout=OPERATION_TIMEOUT_SECONDS)
+
+
 def main() -> int:
+    maybe_reexec_local_venv()
     try:
         return asyncio.run(async_main())
+    except TimeoutError:
+        eprint(
+            f"Telegram operation timed out (deadline {OPERATION_TIMEOUT_SECONDS}s). "
+            "If this was an --execute write, its outcome is unknown; verify in Telegram before retrying."
+        )
+        return 124
     except KeyboardInterrupt:
         eprint("Interrupted")
         return 130

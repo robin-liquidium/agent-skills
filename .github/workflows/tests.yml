@@ -1,0 +1,23 @@
+name: tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  skills:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - run: python -m unittest discover -s send-it/scripts -p 'autoreview_test.py'
+      - run: python -m unittest discover -s send-it/tests -p 'test_*.py'
+      - run: python -m unittest discover -s telegram-cli/tests -p 'test_*.py'
+      - run: python -m unittest discover -s twitterapi-io/tests -p 'test_*.py'
