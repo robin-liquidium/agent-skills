@@ -1,72 +1,30 @@
 ---
 name: telegram-cli
-description: Personal Telegram via Telethon; reads free, writes need explicit execute approval.
+description: "Read and search personal Telegram chats through Telethon; send, mark read, archive, or mute with explicit dry-run/execute approval."
 allowed-tools: Bash(./scripts/telegram-readonly:*), Bash(./scripts/telegram-cli:*)
 ---
 
 # Telegram CLI
 
-Use the local skill script for Telegram work on the user's personal account.
-
-This skill exists because Telegram Bot API is the wrong tool for reading a real personal account. Use MTProto via Telethon instead.
+Use the local MTProto/Telethon script for the user's personal account; Telegram Bot API cannot read it.
 
 ## Quick rules
 
 - Prefer reads first, then propose the action queue.
 - Write commands are dry-run by default and require `--execute`.
 - Never run any write command with `--execute` unless the user explicitly approved that specific action or batch first.
-- For `send`, always present a draft message first and ask the user for confirmation before sending.
-- Do not run `send --execute` unless the user explicitly approved the final recipient and text.
+- For `send`, present the draft first; `send --execute` requires approval of the final recipient and text.
 - Mark-read/archive/mute are still Telegram writes; use them only after the user has approved the batch/action.
 - Do not add edit/delete/bulk export/background automation unless the user explicitly asks.
 - Treat the Telethon session like a high-privilege secret.
 - Assume unread preservation is best-effort until tested on a real chat.
 
-## Local setup
+## Setup
 
-Prefer the skill-local script and cached virtualenv over any global CLI install.
-Prefer saved Telegram config over shell-exported environment variables once setup is complete.
-Treat the virtualenv under `~/.cache/telegram-cli/venv` as generated local state, not part of the skill itself.
-If the installer drops skill-local dotfiles, the bootstrap script recreates `.gitignore` automatically.
+Use the skill-local launcher and cached virtualenv. Read [local setup](references/local-setup.md) for bootstrap, authentication, config, or encrypted credentials, and [setup and safety](references/setup-and-safety.md) for auth/unread-state behavior. `scripts/telegram-readonly` remains a compatibility alias.
 
-Bootstrap the local environment:
+Non-auth CLI operations have a 60-second deadline. A timed-out `--execute` write has an unknown outcome; verify it in Telegram before any retry. Interactive `auth` has no routine operation deadline.
 
-```bash
-<skill-path>/scripts/bootstrap_venv.sh
-```
-
-After bootstrap, use:
-
-```bash
-<skill-path>/scripts/telegram-cli
-```
-
-`scripts/telegram-readonly` remains as a backwards-compatible alias for older workflows.
-
-If the cached virtualenv is missing later, just run the bootstrap script again.
-
-Primary config path:
-
-```bash
-~/.config/telegram-cli/config.json
-```
-
-Recommended one-time setup:
-
-1. Make sure `api_id` and `api_hash` are available.
-2. Save them with:
-
-```bash
-<skill-path>/scripts/setup-api-key.sh
-```
-
-3. Run:
-
-```bash
-<skill-path>/scripts/telegram-cli auth
-```
-
-After successful login, the config file stores `api_id`, `api_hash`, and the Telegram session string so future reads do not need exported shell variables.
 
 ## Commands
 
@@ -168,13 +126,8 @@ Send only after the user approves final text and recipient:
 
 ## Workflow
 
-1. Read `references/setup-and-safety.md` if setup, auth, or unread-state behavior matters.
-2. Ensure the cached virtualenv is bootstrapped.
-3. Ensure Telegram API credentials exist.
-4. Run `auth` once to create the session and write `~/.config/telegram-cli/config.json`.
-5. Use `dialogs`, `messages`, `search`, `unread-dialogs`, or `unread-dms` as needed.
-6. For writes, get the user's approval first, run the dry-run, check the JSON target/action, then use `--execute`.
-7. Keep usage narrow and intentional.
+1. Confirm setup, then read only the chats/messages needed.
+2. For writes, obtain approval, run the dry-run, verify the JSON target/action, then use `--execute`.
 
 ## Expected outputs
 
@@ -197,26 +150,14 @@ Dialog objects include:
 - Local bootstrap: `scripts/bootstrap_venv.sh`
 - Credential setup helper: `scripts/setup-api-key.sh`
 - Setup notes: `references/setup-and-safety.md`
-- Config storage: `~/.config/telegram-cli/config.json`
+- Config storage: `~/.config/telegram-cli/config.json`, or the host's systemd encrypted credential when configured
 - `.env` is optional fallback only; it is not the preferred long-term setup.
 - `~/.cache/telegram-cli/venv` is generated local state and can be recreated with `<skill-path>/scripts/bootstrap_venv.sh`.
 - ChatGPT/Codex MCP server: `mcp/server.mjs`
 
-## ChatGPT/Codex MCP
+## Legacy compatibility
 
-The MCP server exposes typed read tools for dialogs, messages, search, and unread lists. Telegram writes use a mandatory two-step flow: a `telegram_prepare_*` tool returns the resolved dry-run preview and a short-lived one-time token; `telegram_execute_prepared_action` can consume that frozen token only after the user explicitly approves the exact preview in a new message.
-
-The MCP intentionally does not expose arbitrary shell arguments, local text-file paths, interactive auth, edit/delete operations, or background watchers. Run interactive Telegram authentication through the local CLI before starting the MCP.
-
-Install and start locally:
-
-```bash
-cd <skill-path>/mcp
-npm install
-node server.mjs
-```
-
-The durable launcher is `scripts/telegram-mcp`. For an OpenAI Secure MCP Tunnel on this host, install the launcher and service template, create a separate tunnel and restricted runtime key, then run `scripts/finish-telegram-mcp-tunnel`.
+Use the CLI for normal tasks. MCP compatibility code remains for existing consumers; only consult [legacy MCP maintenance](references/legacy-mcp.md) when explicitly maintaining that code. Do not restart the retired tunnel as part of ordinary setup.
 
 ## When to stop and ask
 

@@ -1,14 +1,12 @@
 ---
 name: ddg-search
-description: DuckDuckGo web search fallback when primary search is rate-limited/weak.
+description: "Use DuckDuckGo for web, news, image, or video search when the primary provider fails or needs a second source; no API key required."
 allowed-tools: Bash(./scripts/ddg-search:*)
 ---
 
 # ddg-search
 
 Use the local skill script for lightweight DuckDuckGo search.
-
-This skill exists to make fallback web search simple and low-noise instead of rebuilding ad hoc search helpers each time.
 
 ## Quick rules
 
@@ -104,10 +102,6 @@ If the cached virtualenv is missing later, just run the bootstrap script again.
 5. Cross-check with another source when the question is important.
 
 ## Expected outputs
-
-The tool returns JSON by default. Parse it instead of scraping text.
-
-Use `--text` when you want a readable terminal view.
 
 - `search` returns query metadata plus `results`
 - `instant` returns instant-answer style structured fields

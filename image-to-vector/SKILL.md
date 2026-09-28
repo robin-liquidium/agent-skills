@@ -1,6 +1,6 @@
 ---
 name: image-to-vector
-description: Raster→SVG via VTracer; icons/logos/line art; optional ImageMagick/SVGO.
+description: "Vectorize raster artwork into SVG with VTracer, optional ImageMagick preprocessing, and SVGO cleanup."
 ---
 
 # Image To Vector

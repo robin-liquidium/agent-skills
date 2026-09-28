@@ -2,4 +2,65 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+encrypted_credential="${HOME}/.config/credentials.encrypted/telegram-mcp-tunnel.env.cred"
+credential_loader="${HOME}/.local/libexec/with-systemd-env-credential"
+config_has_credentials=0
+if [[ -r "$encrypted_credential" && -r "${HOME}/.config/telegram-cli/config.json" ]] && \
+  python3 - "${HOME}/.config/telegram-cli/config.json" "${1:-}" <<'PYCONFIG'
+import json
+import sys
+
+try:
+    data = json.load(open(sys.argv[1]))
+    keys = ("api_id", "api_hash") if sys.argv[2] == "auth" else ("api_id", "api_hash", "session_string")
+    valid = isinstance(data, dict) and all(data.get(key) for key in keys)
+except (OSError, ValueError, TypeError):
+    valid = False
+raise SystemExit(0 if valid else 1)
+PYCONFIG
+then
+  config_has_credentials=1
+fi
+if [[ "${TELEGRAM_CLI_SECURE_REEXEC:-}" != "1" \
+  && "$config_has_credentials" != "1" \
+  && !( -n "${TELEGRAM_API_ID:-}" && -n "${TELEGRAM_API_HASH:-}" \
+    && ( "${1:-}" == "auth" || -n "${TELEGRAM_SESSION_STRING:-}" ) ) \
+  && -r "$encrypted_credential" \
+  && -x "$credential_loader" \
+  && -x "$(command -v systemd-run 2>/dev/null || true)" ]]; then
+  unit="telegram-cli-$(date +%s)-$$"
+  run_args=(--user --quiet --wait --pipe --collect --same-dir --unit="$unit")
+  if [[ "${1:-}" != "auth" ]]; then
+    run_args+=(--property=RuntimeMaxSec=75s)
+  fi
+  cleanup() {
+    if [[ "${run_done:-0}" != "1" ]]; then
+      timeout 8s systemctl --user stop "$unit.service" >/dev/null 2>&1 || true
+      if [[ -n "${run_pid:-}" ]]; then
+        kill "$run_pid" 2>/dev/null || true
+        wait "$run_pid" 2>/dev/null || true
+      fi
+    fi
+  }
+  trap cleanup EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  trap 'exit 129' HUP
+  command_args=("$credential_loader" runtime.env "$SCRIPT_DIR/telegram-cli" "$@")
+  escaped_args=()
+  for arg in "${command_args[@]}"; do
+    escaped_args+=("${arg//\$/\$\$}")
+  done
+  systemd-run "${run_args[@]}" \
+    --setenv=TELEGRAM_CLI_SECURE_REEXEC=1 \
+    --property="LoadCredentialEncrypted=runtime.env:${encrypted_credential}" \
+    "${escaped_args[@]}" <&0 &
+  run_pid=$!
+  status=0
+  wait "$run_pid" || status=$?
+  run_done=1
+  exit "$status"
+fi
+
 exec python3 "$SCRIPT_DIR/telegram_cli.py" "$@"

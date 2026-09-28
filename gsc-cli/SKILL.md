@@ -1,6 +1,6 @@
 ---
 name: gsc-cli
-description: "Google Search Console CLI: sites, analytics, sitemaps, URL Inspection."
+description: "Query Google Search Console through gsc-cli for search performance, indexing, sitemaps, and SEO diagnostics."
 allowed-tools: Bash(./scripts/gsc-cli:*)
 ---
 

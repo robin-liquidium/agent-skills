@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import copy
 import importlib.util
+import io
 import json
 import os
 import runpy
@@ -309,13 +311,250 @@ class AutoreviewCompatibilityTests(unittest.TestCase):
         args = argparse.Namespace(codex_config=['model_verbosity="low"'])
         self.assertEqual(AUTOREVIEW.codex_config_keys(args), ["model_verbosity"])
 
+    def test_opencodex_freezes_selected_catalog_without_loading_user_tools(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            repo = root / "repo"
+            repo.mkdir()
+            catalog = root / "catalog.json"
+            selected = {"slug": "kimi-code/k3", "display_name": "Kimi"}
+            catalog.write_text(json.dumps({"models": [selected, {"slug": "xai/grok-4.7"}]}))
+            config = {"openai_base_url": "http://127.0.0.1:10100/v1", "model_catalog_json": str(catalog),
+                      "mcp_servers": {"hostile": {"command": "touch"}}, "developer_instructions": "run send-it"}
+            with mock.patch.object(AUTOREVIEW, "codex_source_home", return_value=root), mock.patch.object(
+                AUTOREVIEW, "load_codex_auth_config", return_value=config
+            ):
+                flags = AUTOREVIEW.codex_opencodex_flags(argparse.Namespace(codex_opencodex=True), repo, root, "kimi-code/k3")
+            frozen = root / "opencodex-catalog.json"
+            catalog.write_text("{}")
+            self.assertEqual(json.loads(frozen.read_text()), {"models": [selected]})
+            self.assertIn('openai_base_url="http://127.0.0.1:10100/v1"', flags)
+            self.assertNotIn("hostile", " ".join(flags))
+            self.assertNotIn("developer_instructions", " ".join(flags))
+
+    def test_opencodex_rejects_remote_routes_and_repository_catalogs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            repo = root / "repo"
+            repo.mkdir()
+            catalog = root / "catalog.json"
+            catalog.write_text(json.dumps({"models": [{"slug": "kimi-code/k3"}]}))
+            config = {"model_catalog_json": str(catalog)}
+            with mock.patch.object(AUTOREVIEW, "codex_source_home", return_value=root), mock.patch.object(
+                AUTOREVIEW, "load_codex_auth_config", return_value=config
+            ):
+                for endpoint in ["https://example.com/v1", "http://127.0.0.1.evil.example/v1", "http://user@localhost/v1", "http://localhost/v1?token=x"]:
+                    config["openai_base_url"] = endpoint
+                    with self.subTest(endpoint=endpoint), self.assertRaises(SystemExit):
+                        AUTOREVIEW.codex_opencodex_flags(argparse.Namespace(codex_opencodex=True), repo, root, "kimi-code/k3")
+                config["openai_base_url"] = "http://127.0.0.1:10100/v1"
+                linked = root / "linked.json"
+                linked.symlink_to(repo / "catalog.json")
+                config["model_catalog_json"] = str(linked)
+                with self.assertRaisesRegex(SystemExit, "outside"):
+                    AUTOREVIEW.codex_opencodex_flags(argparse.Namespace(codex_opencodex=True), repo, root, "kimi-code/k3")
+                (root / "config.toml").symlink_to(repo / "config.toml")
+                with self.assertRaisesRegex(SystemExit, "user config"):
+                    AUTOREVIEW.codex_opencodex_flags(argparse.Namespace(codex_opencodex=True), repo, root, "kimi-code/k3")
+
+    def test_opencodex_uses_same_origin_realtime_route(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            repo = root / "repo"
+            repo.mkdir()
+            catalog = root / "catalog.json"
+            catalog.write_text(json.dumps({"models": [{"slug": "xai/grok-4.7"}]}))
+            config = {
+                "openai_base_url": "http://127.0.0.1:10100/backend-api/codex",
+                "experimental_realtime_ws_base_url": "http://127.0.0.1:10100/v1",
+                "model_catalog_json": str(catalog),
+            }
+            with mock.patch.object(AUTOREVIEW, "codex_source_home", return_value=root), mock.patch.object(
+                AUTOREVIEW, "load_codex_auth_config", return_value=config
+            ):
+                flags = AUTOREVIEW.codex_opencodex_flags(argparse.Namespace(codex_opencodex=True), repo, root, "xai/grok-4.7")
+                self.assertIn('openai_base_url="http://127.0.0.1:10100/v1"', flags)
+                config["experimental_realtime_ws_base_url"] = "http://localhost:10101/v1"
+                with self.assertRaisesRegex(SystemExit, "loopback /v1"):
+                    AUTOREVIEW.codex_opencodex_flags(argparse.Namespace(codex_opencodex=True), repo, root, "xai/grok-4.7")
+
+    def test_opencodex_missing_model_fails_without_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            repo = root / "repo"
+            repo.mkdir()
+            catalog = root / "catalog.json"
+            catalog.write_text(json.dumps({"models": [{"slug": "xai/grok-4.7"}]}))
+            config = {"openai_base_url": "http://localhost:10100/v1", "model_catalog_json": str(catalog)}
+            with mock.patch.object(AUTOREVIEW, "codex_source_home", return_value=root), mock.patch.object(
+                AUTOREVIEW, "load_codex_auth_config", return_value=config
+            ), self.assertRaisesRegex(SystemExit, "missing or ambiguous"):
+                AUTOREVIEW.codex_opencodex_flags(argparse.Namespace(codex_opencodex=True), repo, root, "kimi-code/k3")
+        args = AUTOREVIEW.reviewer_test_args(model=["kimi-code/k3"])
+        args.codex_opencodex = True
+        reviewer = AUTOREVIEW.reviewer_args(args)[0]
+        self.assertEqual(reviewer.model, "kimi-code/k3")
+        self.assertIsNone(reviewer.fallback_model)
+
+    def test_linux_runtime_grants_only_the_external_native_executable(self) -> None:
+        with tempfile.TemporaryDirectory() as td, mock.patch.object(AUTOREVIEW.sys, "platform", "linux"), mock.patch.object(
+            AUTOREVIEW.os, "uname", return_value=argparse.Namespace(machine="x86_64")
+        ):
+            root = Path(td); repo = root / "repo"; repo.mkdir()
+            package = root / "npm"; launcher = package / "bin" / "codex.js"
+            launcher.parent.mkdir(parents=True); launcher.write_text("// official launcher fixture")
+            (package / "package.json").write_text(json.dumps({"name": "@openai/codex"}))
+            binary = package / "node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex"
+            binary.parent.mkdir(parents=True); binary.write_bytes(b"\x7fELFfixture"); binary.chmod(0o755)
+            flags = AUTOREVIEW.codex_linux_runtime_flags(repo, str(launcher))
+            self.assertEqual(flags, ["-c", 'permissions.autoreview.filesystem={":minimal"="read",":workspace_roots"="read",'
+                                     + f'{json.dumps(str(binary.resolve()))}="read"' + "}"])
+            self.assertEqual(AUTOREVIEW.codex_linux_runtime_flags(repo, str(binary)), flags)
+            local = repo / "codex"; local.write_bytes(b"\x7fELFfixture"); local.chmod(0o755)
+            binary.unlink(); binary.symlink_to(local)
+            self.assertEqual(AUTOREVIEW.codex_linux_runtime_flags(repo, str(launcher)), [])
+            wrapper = root / "wrapper"; wrapper.write_text("#!/bin/sh\nexit 0\n"); wrapper.chmod(0o755)
+            self.assertEqual(AUTOREVIEW.codex_linux_runtime_flags(repo, str(wrapper)), [])
+
+    def test_broken_repo_sandbox_stops_before_model_request(self) -> None:
+        with mock.patch.object(sys, "argv", ["autoreview", "--repo-access"]):
+            args = AUTOREVIEW.reviewer_args(AUTOREVIEW.parse_args())[0]
+        with tempfile.TemporaryDirectory() as tmpdir, mock.patch.object(
+            AUTOREVIEW, "resolve_command", return_value="/usr/bin/codex"
+        ), mock.patch.object(AUTOREVIEW, "prepare_codex_runtime_auth", return_value=False), mock.patch.object(
+            AUTOREVIEW, "codex_source_home", return_value=None
+        ), mock.patch.object(AUTOREVIEW.sys, "platform", "linux"), mock.patch.object(
+            AUTOREVIEW, "run", return_value=subprocess.CompletedProcess([], 1, "", "bwrap: Operation not permitted")
+        ), mock.patch.object(AUTOREVIEW, "run_with_heartbeat") as request:
+            with self.assertRaisesRegex(SystemExit, "sandbox preflight failed"):
+                AUTOREVIEW.run_codex(args, Path(tmpdir), "review")
+            request.assert_not_called()
+
+    def test_routed_models_use_prompt_schema_while_native_codex_keeps_api_schema(self) -> None:
+        with mock.patch.object(sys, "argv", ["autoreview"]):
+            args = AUTOREVIEW.reviewer_args(AUTOREVIEW.parse_args())[0]
+        with tempfile.TemporaryDirectory() as tmpdir, mock.patch.object(
+            AUTOREVIEW, "resolve_command", return_value="/usr/bin/codex"
+        ), mock.patch.object(AUTOREVIEW, "codex_auth_config_flags", return_value=[]), mock.patch.object(
+            AUTOREVIEW, "codex_opencodex_flags", return_value=[]
+        ):
+            root = Path(tmpdir)
+            for routed, model, schema in [(True, "kimi-code/k3", False), (True, "xai/grok-4.7", False), (False, "gpt-6-astra", True)]:
+                args.codex_opencodex = routed
+                with self.subTest(model=model):
+                    cmd = AUTOREVIEW.codex_command(args, root, root, root, root / "schema.json", root / "out.json", model)
+                    self.assertEqual("--output-schema" in cmd, schema)
+                    self.assertIn("--ignore-user-config", cmd)
+                    self.assertIn("--ignore-rules", cmd)
+                    self.assertIn("--json", cmd)
+
+    def test_routed_json_prefix_normalization_stays_strict(self) -> None:
+        with mock.patch.object(sys, "argv", ["autoreview", "--codex-opencodex", "--model", "kimi-code/k3"]):
+            args = AUTOREVIEW.reviewer_args(AUTOREVIEW.parse_args())[0]
+        with tempfile.TemporaryDirectory() as tmpdir, mock.patch.object(
+            AUTOREVIEW, "resolve_command", return_value="/usr/bin/codex"
+        ), mock.patch.object(AUTOREVIEW, "prepare_codex_runtime_auth", return_value=False), mock.patch.object(
+            AUTOREVIEW, "codex_source_home", return_value=None
+        ), mock.patch.object(AUTOREVIEW, "codex_opencodex_flags", return_value=[]):
+            for text, accepted in [("Inspected the code.\n" + json.dumps(FINAL_REPORT), True),
+                                   ("Inspected the code.\n" + json.dumps(FINAL_REPORT) + "\n{}", False),
+                                   ("Inspected the code.\n{}", False)]:
+                def request(cmd, *_args, **_kwargs):
+                    Path(cmd[cmd.index("--output-last-message") + 1]).write_text(text)
+                    return subprocess.CompletedProcess(cmd, 0, "", "")
+                with self.subTest(text=text), mock.patch.object(AUTOREVIEW, "run_with_heartbeat", side_effect=request):
+                    if accepted:
+                        report = AUTOREVIEW.run_reviewer(args, Path(tmpdir), "review", set(), [])
+                        self.assertEqual(report, FINAL_REPORT)
+                    else:
+                        with self.assertRaises(SystemExit):
+                            AUTOREVIEW.run_reviewer(args, Path(tmpdir), "review", set(), [])
+
+    def test_routed_reviews_bypass_inherited_proxies(self) -> None:
+        with mock.patch.object(sys, "argv", ["autoreview", "--codex-opencodex", "--model", "kimi-code/k3"]):
+            args = AUTOREVIEW.reviewer_args(AUTOREVIEW.parse_args())[0]
+        proxy_keys = ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy")
+        inherited = {key: "http://127.0.0.1:9" for key in proxy_keys}
+        inherited.update({"NO_PROXY": "", "no_proxy": ""})
+        with tempfile.TemporaryDirectory() as tmpdir, mock.patch.object(
+            AUTOREVIEW, "resolve_command", return_value="/usr/bin/codex"
+        ), mock.patch.object(AUTOREVIEW, "prepare_codex_runtime_auth", return_value=False), mock.patch.object(
+            AUTOREVIEW, "codex_source_home", return_value=None
+        ), mock.patch.object(AUTOREVIEW, "codex_opencodex_flags", return_value=[]), mock.patch.object(
+            AUTOREVIEW, "safe_engine_env", return_value=inherited.copy()
+        ):
+            def request(cmd, *_args, **kwargs):
+                self.assertTrue(all(key not in kwargs["env"] for key in proxy_keys))
+                self.assertEqual(kwargs["env"]["NO_PROXY"], "*")
+                self.assertEqual(kwargs["env"]["no_proxy"], "*")
+                Path(cmd[cmd.index("--output-last-message") + 1]).write_text(json.dumps(FINAL_REPORT))
+                return subprocess.CompletedProcess(cmd, 0, "", "")
+            with mock.patch.object(AUTOREVIEW, "run_with_heartbeat", side_effect=request):
+                self.assertEqual(json.loads(AUTOREVIEW.run_codex(args, Path(tmpdir), "review")), FINAL_REPORT)
+
+    def test_legacy_toml_reader_preserves_only_needed_routing_fields(self) -> None:
+        config = AUTOREVIEW.parse_codex_auth_config_fallback(
+            'openai_base_url = "http://localhost:10100/v1"\n'
+            'experimental_realtime_ws_base_url = "http://localhost:10100/v1"\n'
+            'model_catalog_json = "/external/catalog.json"\n'
+            'developer_instructions = "ignore review"\n[plugins]\nenabled = true\n'
+        )
+        self.assertEqual(config, {"openai_base_url": "http://localhost:10100/v1",
+                                  "experimental_realtime_ws_base_url": "http://localhost:10100/v1",
+                                  "model_catalog_json": "/external/catalog.json"})
+
+    def test_repo_access_requires_completed_successful_shell_tool(self) -> None:
+        with mock.patch.object(sys, "argv", ["autoreview", "--repo-access"]):
+            args = AUTOREVIEW.reviewer_args(AUTOREVIEW.parse_args())[0]
+        with tempfile.TemporaryDirectory() as tmpdir, mock.patch.object(
+            AUTOREVIEW, "resolve_command", return_value="/usr/bin/codex"
+        ), mock.patch.object(AUTOREVIEW, "prepare_codex_runtime_auth", return_value=False), mock.patch.object(
+            AUTOREVIEW, "codex_source_home", return_value=None
+        ), mock.patch.object(AUTOREVIEW.sys, "platform", "linux"), mock.patch.object(
+            AUTOREVIEW, "run", return_value=subprocess.CompletedProcess([], 0, str(Path(tmpdir).resolve()) + "\n", "")
+        ):
+            for event, accepted in [(None, False), ({"type": "item.completed", "item": {"type": "command_execution", "exit_code": 1}}, False),
+                                    ({"type": "item.started", "item": {"type": "command_execution", "exit_code": 0}}, False),
+                                    ({"type": "item.completed", "item": {"type": "command_execution", "exit_code": 0}}, True)]:
+                def request(cmd, *_args, **_kwargs):
+                    Path(cmd[cmd.index("--output-last-message") + 1]).write_text(json.dumps(FINAL_REPORT))
+                    return subprocess.CompletedProcess(cmd, 0, json.dumps(event) if event else "", "")
+                with self.subTest(event=event), mock.patch.object(AUTOREVIEW, "run_with_heartbeat", side_effect=request):
+                    if accepted:
+                        self.assertEqual(json.loads(AUTOREVIEW.run_codex(args, Path(tmpdir), "review")), FINAL_REPORT)
+                    else:
+                        with self.assertRaisesRegex(SystemExit, "shell-tool execution"):
+                            AUTOREVIEW.run_codex(args, Path(tmpdir), "review")
+
+    def test_review_outcomes_have_distinct_exit_codes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = Path(tmpdir)
+            for command in [["init", "-q"], ["config", "user.email", "fixture@example.invalid"], ["config", "user.name", "Fixture"]]:
+                subprocess.run(["git", *command], cwd=repo, check=True, capture_output=True)
+            (repo / "limit.py").write_text("def can_add(n, limit):\n    return n < limit\n")
+            subprocess.run(["git", "add", "limit.py"], cwd=repo, check=True)
+            subprocess.run(["git", "commit", "-qm", "baseline"], cwd=repo, check=True)
+            (repo / "limit.py").write_text("def can_add(n, limit):\n    return n <= limit\n")
+            finding = copy.deepcopy(DRAFT_REPORT)
+            finding["findings"][0].update(priority="P2", category="bug", code_location={"file_path": "limit.py", "line": 2})
+            incomplete = dict(FINAL_REPORT, overall_correctness="patch is incorrect", overall_explanation="Unable to inspect")
+            with mock.patch.object(sys, "argv", ["autoreview", "--mode", "local", "--max-priority", "P2"]), mock.patch.object(
+                AUTOREVIEW, "repo_root", return_value=repo
+            ), mock.patch.object(AUTOREVIEW, "run_trufflehog_preflight"), contextlib.redirect_stdout(io.StringIO()):
+                for report, expected in [(FINAL_REPORT, 0), (finding, 2), (incomplete, 1)]:
+                    with self.subTest(expected=expected), mock.patch.object(AUTOREVIEW, "run_engine", return_value=json.dumps(report)):
+                        self.assertEqual(AUTOREVIEW.main(), expected)
+                for malformed in ["", "not JSON", "{}"]:
+                    with self.subTest(malformed=malformed), mock.patch.object(AUTOREVIEW, "run_engine", return_value=malformed), self.assertRaises(SystemExit):
+                        AUTOREVIEW.main()
+
     def test_codex_retries_terra_after_sol_access_failure(self) -> None:
         args = argparse.Namespace(
             codex_bin="codex",
             codex_config=None,
             codex_speed=None,
             fallback_model="gpt-5.6-terra",
-            model="gpt-5.6-sol",
+            model="gpt-6-astra",
             stream_engine_output=False,
             thinking="high",
             tools=True,
@@ -326,12 +565,12 @@ class AutoreviewCompatibilityTests(unittest.TestCase):
         def fake_run(command: list[str], *_args: object, **_kwargs: object) -> subprocess.CompletedProcess[str]:
             model = command[command.index("--model") + 1]
             models.append(model)
-            if model == "gpt-5.6-sol":
+            if model == "gpt-6-astra":
                 return subprocess.CompletedProcess(
                     command,
                     1,
                     "",
-                    "The model `gpt-5.6-sol` does not exist or you do not have access to it.",
+                    "The model `gpt-6-astra` does not exist or you do not have access to it.",
                 )
             output_path = Path(command[command.index("--output-last-message") + 1])
             output_path.write_text(json.dumps(FINAL_REPORT))
@@ -353,7 +592,7 @@ class AutoreviewCompatibilityTests(unittest.TestCase):
             output = AUTOREVIEW.run_codex(args, Path(tmpdir), "review")
 
         self.assertEqual(json.loads(output), FINAL_REPORT)
-        self.assertEqual(models, ["gpt-5.6-sol", "gpt-5.6-terra"])
+        self.assertEqual(models, ["gpt-6-astra", "gpt-5.6-terra"])
 
     def test_codex_runs_outside_repo_with_bundle_only_workspace(self) -> None:
         args = argparse.Namespace(
@@ -361,7 +600,7 @@ class AutoreviewCompatibilityTests(unittest.TestCase):
             codex_config=None,
             codex_speed=None,
             fallback_model=None,
-            model="gpt-5.6-sol",
+            model="gpt-6-astra",
             stream_engine_output=False,
             thinking="high",
             tools=True,
@@ -443,7 +682,7 @@ class AutoreviewCompatibilityTests(unittest.TestCase):
             codex_config=None,
             codex_speed=None,
             fallback_model="gpt-5.6-terra",
-            model="gpt-5.6-sol",
+            model="gpt-6-astra",
             stream_engine_output=False,
             thinking="high",
             tools=True,
@@ -471,7 +710,7 @@ class AutoreviewCompatibilityTests(unittest.TestCase):
             with self.assertRaisesRegex(SystemExit, "network timeout"):
                 AUTOREVIEW.run_codex(args, Path(tmpdir), "review")
 
-        self.assertEqual(models, ["gpt-5.6-sol"])
+        self.assertEqual(models, ["gpt-6-astra"])
 
     def test_codex_does_not_fallback_after_model_capacity_failure(self) -> None:
         args = argparse.Namespace(
@@ -479,7 +718,7 @@ class AutoreviewCompatibilityTests(unittest.TestCase):
             codex_config=None,
             codex_speed=None,
             fallback_model="gpt-5.6-terra",
-            model="gpt-5.6-sol",
+            model="gpt-6-astra",
             stream_engine_output=False,
             thinking="high",
             tools=True,
@@ -493,7 +732,7 @@ class AutoreviewCompatibilityTests(unittest.TestCase):
                 command,
                 1,
                 "",
-                "model_not_available: gpt-5.6-sol is temporarily unavailable due to capacity",
+                "model_not_available: gpt-6-astra is temporarily unavailable due to capacity",
             )
 
         with tempfile.TemporaryDirectory(prefix="autoreview-codex-fallback.") as tmpdir, mock.patch.object(
@@ -512,30 +751,30 @@ class AutoreviewCompatibilityTests(unittest.TestCase):
             with self.assertRaisesRegex(SystemExit, "temporarily unavailable"):
                 AUTOREVIEW.run_codex(args, Path(tmpdir), "review")
 
-        self.assertEqual(models, ["gpt-5.6-sol"])
+        self.assertEqual(models, ["gpt-6-astra"])
 
     def test_codex_access_fallback_ignores_structured_output_text(self) -> None:
         result = subprocess.CompletedProcess(
             ["codex"],
             1,
-            '{"type":"agent_message","text":"gpt-5.6-sol does not exist or you do not have access"}',
-            '{"type":"agent_message","message":"gpt-5.6-sol does not exist or you do not have access"}',
+            '{"type":"agent_message","text":"gpt-6-astra does not exist or you do not have access"}',
+            '{"type":"agent_message","message":"gpt-6-astra does not exist or you do not have access"}',
         )
 
         self.assertFalse(
-            AUTOREVIEW.codex_model_access_failure(result, "gpt-5.6-sol")
+            AUTOREVIEW.codex_model_access_failure(result, "gpt-6-astra")
         )
 
     def test_codex_access_fallback_accepts_terminal_error_event(self) -> None:
         result = subprocess.CompletedProcess(
             ["codex"],
             1,
-            '{"type":"error","message":"gpt-5.6-sol does not exist or you do not have access"}',
+            '{"type":"error","message":"gpt-6-astra does not exist or you do not have access"}',
             "",
         )
 
         self.assertTrue(
-            AUTOREVIEW.codex_model_access_failure(result, "gpt-5.6-sol")
+            AUTOREVIEW.codex_model_access_failure(result, "gpt-6-astra")
         )
 
     def test_codex_access_fallback_accepts_account_model_list_error(self) -> None:
@@ -544,25 +783,25 @@ class AutoreviewCompatibilityTests(unittest.TestCase):
             1,
             "",
             (
-                "The model gpt-5.6-sol does not appear in the list of models "
+                "The model gpt-6-astra does not appear in the list of models "
                 "available to your account"
             ),
         )
 
         self.assertTrue(
-            AUTOREVIEW.codex_model_access_failure(result, "gpt-5.6-sol")
+            AUTOREVIEW.codex_model_access_failure(result, "gpt-6-astra")
         )
 
     def test_codex_access_fallback_ignores_plain_stdout(self) -> None:
-        message = "gpt-5.6-sol does not exist or you do not have access"
+        message = "gpt-6-astra does not exist or you do not have access"
         stdout_result = subprocess.CompletedProcess(["codex"], 1, message, "")
         stderr_result = subprocess.CompletedProcess(["codex"], 1, "", message)
 
         self.assertFalse(
-            AUTOREVIEW.codex_model_access_failure(stdout_result, "gpt-5.6-sol")
+            AUTOREVIEW.codex_model_access_failure(stdout_result, "gpt-6-astra")
         )
         self.assertTrue(
-            AUTOREVIEW.codex_model_access_failure(stderr_result, "gpt-5.6-sol")
+            AUTOREVIEW.codex_model_access_failure(stderr_result, "gpt-6-astra")
         )
 
     def test_extract_json_accepts_dict_result_payload(self) -> None:

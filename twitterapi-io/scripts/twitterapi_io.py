@@ -40,6 +40,23 @@ def load_raw_config() -> dict[str, Any]:
 
 
 def save_config(data: dict[str, Any]) -> None:
+    if CONFIG_PATH.exists():
+        reference = json.loads(CONFIG_PATH.read_text()).get("api_key")
+        if reference is not None and not isinstance(reference, (str, dict)):
+            raise SystemExit("Invalid saved TwitterAPI credential")
+        if isinstance(reference, dict):
+            if set(reference) != {"$agent_secret"} or not isinstance(reference["$agent_secret"], str) or not reference["$agent_secret"]:
+                raise SystemExit("Invalid agent-secrets reference")
+            try:
+                result = subprocess.run(
+                    [str(Path.home() / ".local/bin/secrets"), "set", reference["$agent_secret"], "--stdin"],
+                    input=data["api_key"], capture_output=True, text=True, check=False, timeout=15,
+                )
+            except subprocess.TimeoutExpired as exc:
+                raise SystemExit("Cannot update TwitterAPI credential in agent-secrets") from exc
+            if result.returncode:
+                raise SystemExit("Cannot update TwitterAPI credential in agent-secrets")
+            return
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     CONFIG_DIR.chmod(stat.S_IRWXU)
     CONFIG_PATH.write_text(json.dumps(data, indent=2) + "\n")
@@ -49,8 +66,25 @@ def save_config(data: dict[str, Any]) -> None:
 def get_api_key() -> str:
     data = load_raw_config()
     key = os.getenv("TWITTERAPI_IO_KEY") or data.get("api_key")
+    if isinstance(key, dict):
+        if set(key) != {"$agent_secret"} or not isinstance(key["$agent_secret"], str):
+            raise SystemExit("Invalid agent-secrets reference")
+        try:
+            result = subprocess.run(
+                [str(Path.home() / ".local/bin/secrets"), "get", key["$agent_secret"]],
+                capture_output=True, text=True, check=False, timeout=15,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise SystemExit("Cannot load TwitterAPI credential from agent-secrets") from exc
+        if result.returncode:
+            raise SystemExit("Cannot load TwitterAPI credential from agent-secrets")
+        key = result.stdout
+    if isinstance(key, str):
+        key = key.strip()
     if not key:
         raise SystemExit("Missing TWITTERAPI_IO_KEY. Set the env var or run scripts/setup-api-key.sh.")
+    if not isinstance(key, str) or "\n" in key or "\r" in key:
+        raise SystemExit("Invalid TwitterAPI key")
     return key
 
 
@@ -66,14 +100,14 @@ def curl_json(path: str, params: Optional[dict[str, Any]] = None) -> dict[str, A
         "-sS",
         "--fail-with-body",
         "-H",
-        f"x-api-key: {api_key}",
+        "@-",
         "-H",
         "Accept: application/json",
         "-H",
         f"User-Agent: {DEFAULT_UA}",
         url,
     ]
-    out = subprocess.check_output(cmd, stderr=subprocess.STDOUT, timeout=60)
+    out = subprocess.check_output(cmd, input=f"x-api-key: {api_key}\n".encode(), stderr=subprocess.STDOUT, timeout=60)
     return json.loads(out.decode("utf-8"))
 
 
