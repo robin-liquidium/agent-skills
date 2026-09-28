@@ -348,8 +348,6 @@ async def resolve_dialog(client: Any, chat: str) -> Any:
         if numeric_id is not None and dialog.id == numeric_id:
             return dialog
         dialogs.append(dialog)
-        if numeric_id is not None:
-            continue
         row = dialog_to_dict(dialog)
         for candidate in (row.get("name"), row.get("title"), row.get("username")):
             if candidate and lowered == str(candidate).lower():
@@ -728,7 +726,7 @@ def main() -> int:
     maybe_reexec_local_venv()
     try:
         return asyncio.run(async_main())
-    except TimeoutError:
+    except (TimeoutError, asyncio.TimeoutError):
         eprint(
             f"Telegram operation timed out (deadline {OPERATION_TIMEOUT_SECONDS}s). "
             "If this was an --execute write, its outcome is unknown; verify in Telegram before retrying."

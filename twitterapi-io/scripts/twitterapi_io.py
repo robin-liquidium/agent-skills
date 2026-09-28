@@ -43,10 +43,13 @@ def save_config(data: dict[str, Any]) -> None:
     if CONFIG_PATH.exists():
         reference = json.loads(CONFIG_PATH.read_text()).get("api_key")
         if isinstance(reference, dict) and set(reference) == {"$agent_secret"}:
-            result = subprocess.run(
-                [str(Path.home() / ".local/bin/secrets"), "set", reference["$agent_secret"], "--stdin"],
-                input=data["api_key"], capture_output=True, text=True, check=False,
-            )
+            try:
+                result = subprocess.run(
+                    [str(Path.home() / ".local/bin/secrets"), "set", reference["$agent_secret"], "--stdin"],
+                    input=data["api_key"], capture_output=True, text=True, check=False, timeout=15,
+                )
+            except subprocess.TimeoutExpired as exc:
+                raise SystemExit("Cannot update TwitterAPI credential in agent-secrets") from exc
             if result.returncode:
                 raise SystemExit("Cannot update TwitterAPI credential in agent-secrets")
             return
@@ -62,10 +65,13 @@ def get_api_key() -> str:
     if isinstance(key, dict):
         if set(key) != {"$agent_secret"} or not isinstance(key["$agent_secret"], str):
             raise SystemExit("Invalid agent-secrets reference")
-        result = subprocess.run(
-            [str(Path.home() / ".local/bin/secrets"), "get", key["$agent_secret"]],
-            capture_output=True, text=True, check=False,
-        )
+        try:
+            result = subprocess.run(
+                [str(Path.home() / ".local/bin/secrets"), "get", key["$agent_secret"]],
+                capture_output=True, text=True, check=False, timeout=15,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise SystemExit("Cannot load TwitterAPI credential from agent-secrets") from exc
         if result.returncode:
             raise SystemExit("Cannot load TwitterAPI credential from agent-secrets")
         key = result.stdout

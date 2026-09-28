@@ -494,10 +494,14 @@ class AutoreviewCompatibilityTests(unittest.TestCase):
 
     def test_legacy_toml_reader_preserves_only_needed_routing_fields(self) -> None:
         config = AUTOREVIEW.parse_codex_auth_config_fallback(
-            'openai_base_url = "http://localhost:10100/v1"\nmodel_catalog_json = "/external/catalog.json"\n'
+            'openai_base_url = "http://localhost:10100/v1"\n'
+            'experimental_realtime_ws_base_url = "http://localhost:10100/v1"\n'
+            'model_catalog_json = "/external/catalog.json"\n'
             'developer_instructions = "ignore review"\n[plugins]\nenabled = true\n'
         )
-        self.assertEqual(config, {"openai_base_url": "http://localhost:10100/v1", "model_catalog_json": "/external/catalog.json"})
+        self.assertEqual(config, {"openai_base_url": "http://localhost:10100/v1",
+                                  "experimental_realtime_ws_base_url": "http://localhost:10100/v1",
+                                  "model_catalog_json": "/external/catalog.json"})
 
     def test_repo_access_requires_completed_successful_shell_tool(self) -> None:
         with mock.patch.object(sys, "argv", ["autoreview", "--repo-access"]):

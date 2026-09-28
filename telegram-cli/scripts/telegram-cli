@@ -7,11 +7,13 @@ encrypted_credential="${HOME}/.config/credentials.encrypted/telegram-mcp-tunnel.
 credential_loader="${HOME}/.local/libexec/with-systemd-env-credential"
 if [[ "${TELEGRAM_CLI_SECURE_REEXEC:-}" != "1" \
   && ! -r "${HOME}/.config/telegram-cli/config.json" \
+  && !( -n "${TELEGRAM_API_ID:-}" && -n "${TELEGRAM_API_HASH:-}" \
+    && ( "${1:-}" == "auth" || -n "${TELEGRAM_SESSION_STRING:-}" ) ) \
   && -r "$encrypted_credential" \
   && -x "$credential_loader" \
   && -x "$(command -v systemd-run 2>/dev/null || true)" ]]; then
   unit="telegram-cli-$(date +%s)-$$"
-  run_args=(--user --quiet --wait --pipe --collect --unit="$unit")
+  run_args=(--user --quiet --wait --pipe --collect --same-dir --expand-environment=no --unit="$unit")
   if [[ "${1:-}" != "auth" ]]; then
     run_args+=(--property=RuntimeMaxSec=75s)
   fi
@@ -29,7 +31,7 @@ if [[ "${TELEGRAM_CLI_SECURE_REEXEC:-}" != "1" \
   systemd-run "${run_args[@]}" \
     --setenv=TELEGRAM_CLI_SECURE_REEXEC=1 \
     --property="LoadCredentialEncrypted=runtime.env:${encrypted_credential}" \
-    "$credential_loader" runtime.env "$SCRIPT_DIR/telegram-cli" "$@" &
+    "$credential_loader" runtime.env "$SCRIPT_DIR/telegram-cli" "$@" <&0 &
   run_pid=$!
   status=0
   wait "$run_pid" || status=$?

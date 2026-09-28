@@ -72,6 +72,10 @@ class DialogResolutionTests(unittest.IsolatedAsyncioTestCase):
             await cli.resolve_dialog(client, "same")
         self.assertEqual(client.yielded, 3)
 
+    async def test_numeric_title_matches_when_id_does_not(self):
+        client = FakeClient([dialog(1, "12345")])
+        self.assertEqual((await cli.resolve_dialog(client, "12345")).id, 1)
+
     async def test_deadline_cancels_read_and_disconnects(self):
         client = FakeClient([dialog(123, "target")])
         with patch.object(cli, "load_settings", return_value=None), \
@@ -109,6 +113,60 @@ class TimeoutReportingTests(unittest.TestCase):
 
 
 class LauncherCleanupTests(unittest.TestCase):
+    def test_encrypted_launcher_preserves_stdin_and_arguments(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            credential = home / ".config/credentials.encrypted/telegram-mcp-tunnel.env.cred"
+            credential.parent.mkdir(parents=True)
+            credential.touch()
+            loader = home / ".local/libexec/with-systemd-env-credential"
+            loader.parent.mkdir(parents=True)
+            loader.write_text("#!/bin/sh\nexit 0\n")
+            loader.chmod(0o700)
+            bin_dir = home / "bin"
+            bin_dir.mkdir()
+            runner = bin_dir / "systemd-run"
+            runner.write_text("#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$HOME/run.args\"\ncat\n")
+            runner.chmod(0o700)
+            env = {**os.environ, "HOME": str(home), "PATH": f"{bin_dir}:{os.environ['PATH']}"}
+            for key in ("TELEGRAM_API_ID", "TELEGRAM_API_HASH", "TELEGRAM_SESSION_STRING"):
+                env.pop(key, None)
+            result = subprocess.run([str(SKILL_DIR / "scripts/telegram-cli"), "auth", "${LITERAL}"],
+                                    input="piped marker\n", text=True, capture_output=True, env=env, check=False)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout, "piped marker\n")
+            arguments = (home / "run.args").read_text().splitlines()
+            self.assertIn("--same-dir", arguments)
+            self.assertIn("--expand-environment=no", arguments)
+            self.assertEqual(arguments[-3:], [str(SKILL_DIR / "scripts/telegram-cli"), "auth", "${LITERAL}"])
+
+    def test_explicit_credentials_skip_encrypted_launcher(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            credential = home / ".config/credentials.encrypted/telegram-mcp-tunnel.env.cred"
+            credential.parent.mkdir(parents=True)
+            credential.touch()
+            loader = home / ".local/libexec/with-systemd-env-credential"
+            loader.parent.mkdir(parents=True)
+            loader.write_text("#!/bin/sh\nexit 0\n")
+            loader.chmod(0o700)
+            bin_dir = home / "bin"
+            bin_dir.mkdir()
+            (bin_dir / "systemd-run").write_text("#!/bin/sh\nexit 99\n")
+            (bin_dir / "systemd-run").chmod(0o700)
+            (bin_dir / "python3").write_text("#!/bin/sh\nprintf '%s\\n' \"$@\"\n")
+            (bin_dir / "python3").chmod(0o700)
+            env = {**os.environ, "HOME": str(home), "PATH": f"{bin_dir}:{os.environ['PATH']}",
+                   "TELEGRAM_API_ID": "123", "TELEGRAM_API_HASH": "hash"}
+            for args in (("auth",), ("messages", "--chat", "1")):
+                case_env = dict(env)
+                if args[0] != "auth":
+                    case_env["TELEGRAM_SESSION_STRING"] = "session"
+                result = subprocess.run([str(SKILL_DIR / "scripts/telegram-cli"), *args],
+                                        text=True, capture_output=True, env=case_env, check=False)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn(str(SKILL_DIR / "scripts/telegram_cli.py"), result.stdout)
+
     def test_termination_stops_transient_unit(self):
         with tempfile.TemporaryDirectory() as tmp:
             home = Path(tmp)

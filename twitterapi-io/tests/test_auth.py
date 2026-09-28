@@ -45,6 +45,14 @@ class CredentialTests(unittest.TestCase):
         ) as run, mock.patch.object(twitterapi_io.Path, "home", return_value=self.home):
             self.assertEqual(twitterapi_io.get_api_key(), "fake-api-key")
         self.assertEqual(run.call_args.args[0], [str(self.home / ".local/bin/secrets"), "get", "test/twitter-key"])
+        self.assertEqual(run.call_args.kwargs["timeout"], 15)
+
+    def test_get_api_key_vault_timeout_uses_existing_error(self):
+        self.config_path.write_text(json.dumps({"api_key": {"$agent_secret": "test/twitter-key"}}))
+        with mock.patch.dict(os.environ, {}, clear=True), mock.patch.object(
+            twitterapi_io.subprocess, "run", side_effect=subprocess.TimeoutExpired("secrets", 15)
+        ), self.assertRaisesRegex(SystemExit, "Cannot load TwitterAPI credential"):
+            twitterapi_io.get_api_key()
 
     def test_save_config_rotates_vault_without_plaintext_file(self):
         original = json.dumps({"api_key": {"$agent_secret": "test/other-key"}}) + "\n"
@@ -56,7 +64,16 @@ class CredentialTests(unittest.TestCase):
         self.assertEqual(self.config_path.read_text(), original)
         self.assertEqual(run.call_args.args[0], [str(self.home / ".local/bin/secrets"), "set", "test/other-key", "--stdin"])
         self.assertEqual(run.call_args.kwargs["input"], "replacement-fake-key")
+        self.assertEqual(run.call_args.kwargs["timeout"], 15)
         self.assertNotIn("replacement-fake-key", " ".join(run.call_args.args[0]))
+
+    def test_save_config_vault_timeout_uses_existing_error(self):
+        original = json.dumps({"api_key": {"$agent_secret": "test/other-key"}}) + "\n"
+        self.config_path.write_text(original)
+        with mock.patch.object(twitterapi_io.subprocess, "run", side_effect=subprocess.TimeoutExpired("secrets", 15)), \
+             self.assertRaisesRegex(SystemExit, "Cannot update TwitterAPI credential"):
+            twitterapi_io.save_config({"api_key": "replacement-fake-key"})
+        self.assertEqual(self.config_path.read_text(), original)
 
     def test_curl_receives_secret_on_stdin_only(self):
         with mock.patch.object(twitterapi_io, "get_api_key", return_value="fake-api-key"), mock.patch.object(
@@ -137,14 +154,36 @@ class CredentialTests(unittest.TestCase):
         systemd_run.write_text('#!/bin/sh\nprintf "%s\\n" "$@" > "$HOME/systemd-run-args"\n')
         systemd_run.chmod(0o700)
         result = subprocess.run(
-            ["bash", str(LAUNCHER_PATH), "help"], text=True, capture_output=True,
+            ["bash", "scripts/twitterapi-io", "help"], cwd=SKILL_DIR, text=True, capture_output=True,
             env={**os.environ, "HOME": str(self.home), "PATH": f"{fake_bin}:{os.environ['PATH']}"}, check=False,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         arguments = (self.home / "systemd-run-args").read_text().splitlines()
         self.assertIn(f"--property=LoadCredentialEncrypted=runtime.env:{credential}", arguments)
         self.assertIn(str(loader), arguments)
+        self.assertIn("--same-dir", arguments)
+        self.assertIn("--expand-environment=no", arguments)
         self.assertEqual(arguments[-2:], [str(LAUNCHER_PATH), "help"])
+
+    def test_explicit_key_skips_encrypted_launcher(self):
+        credential = self.home / ".config/credentials.encrypted/twitterapi-mcp-tunnel.env.cred"
+        credential.parent.mkdir(parents=True)
+        credential.touch()
+        loader = self.home / ".local/libexec/with-systemd-env-credential"
+        loader.parent.mkdir(parents=True)
+        loader.write_text("#!/bin/sh\nexit 0\n")
+        loader.chmod(0o700)
+        fake_bin = self.home / "bin"
+        fake_bin.mkdir()
+        (fake_bin / "systemd-run").write_text("#!/bin/sh\nexit 99\n")
+        (fake_bin / "systemd-run").chmod(0o700)
+        (fake_bin / "python3").write_text("#!/bin/sh\nprintf '%s\\n' \"$@\"\n")
+        (fake_bin / "python3").chmod(0o700)
+        result = subprocess.run(["bash", str(LAUNCHER_PATH), "help"], text=True, capture_output=True,
+                                env={**os.environ, "HOME": str(self.home), "PATH": f"{fake_bin}:{os.environ['PATH']}",
+                                     "TWITTERAPI_IO_KEY": "explicit-key"}, check=False)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(str(MODULE_PATH), result.stdout)
 
 
 if __name__ == "__main__":

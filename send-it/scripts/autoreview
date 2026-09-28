@@ -9553,7 +9553,7 @@ def parse_codex_auth_config_fallback(text: str) -> dict[str, Any]:
         if line.startswith("["):
             break
         match = re.fullmatch(
-            r"(cli_auth_credentials_store|forced_login_method|forced_chatgpt_workspace_id|openai_base_url|model_catalog_json)\s*=\s*(.+)",
+            r"(cli_auth_credentials_store|forced_login_method|forced_chatgpt_workspace_id|openai_base_url|experimental_realtime_ws_base_url|model_catalog_json)\s*=\s*(.+)",
             line,
         )
         if not match:
