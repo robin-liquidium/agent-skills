@@ -1,105 +1,75 @@
 ---
 name: helium-browser
-description: "Attach browser tools to a running Helium profile; troubleshoot WebSocket-only CDP discovery, permissions, and failed attachments."
+description: "Drive the user's running Helium browser (real tabs, logins) with agent-browser over one approved CDP connection; setup, the one-prompt rule, and troubleshooting."
 ---
 
 # Helium Browser
 
-Helium (https://helium.computer/) is a Chromium-based browser. Agent tooling (playwright-cli, chrome-devtools-mcp) can attach to a running Helium with the user's real profile, but only over WebSocket. For all actual automation commands after attaching, use the `playwright-cli` skill; this skill only covers the Helium-specific connection setup.
+Helium (https://helium.computer/) is a Chromium-based browser. Use **agent-browser** attached over CDP to control the user's live Helium with its real tabs, cookies, and logins. For agent-browser usage itself, load `agent-browser skills get core`; this skill covers only the Helium-specific connection.
 
-## Prerequisite: enable remote debugging
+**Every new CDP connection makes Helium show an "Allow remote debugging?" prompt that the user must click.** The whole task must therefore use exactly one connection. agent-browser's per-session daemon holds that connection across commands, so the user approves once.
 
-The user must enable remote debugging once in Helium:
+## Prerequisite
 
-1. Open `helium://inspect/#remote-debugging`
-2. Enable remote debugging
-
-This persists across restarts. While enabled, Helium writes a `DevToolsActivePort` file into its user-data directory and may show a permission prompt when a new debugging session connects.
-
-## Key fact: WebSocket-only debug server
-
-Helium's remote debugging server disables the HTTP discovery endpoints. All of these return 404:
-
-- `http://127.0.0.1:<port>/json/version`
-- `http://127.0.0.1:<port>/json/list`
-
-Consequences:
-
-- `playwright-cli attach --cdp=http://...` does NOT work (Playwright needs `/json/version`).
-- `chrome-devtools-mcp --browserUrl http://...` does NOT work.
-- Attaching must use the WebSocket endpoint from `DevToolsActivePort`, or a tool that reads that file itself.
-
-## Helium user-data directory
-
-`DevToolsActivePort` lives in Helium's user-data directory:
+The user enables remote debugging once at `helium://inspect/#remote-debugging`. It persists across restarts. While enabled, Helium writes `DevToolsActivePort` into its user-data directory:
 
 - macOS: `~/Library/Application Support/net.imput.helium`
-- Windows: `%LOCALAPPDATA%\imput\Helium\User Data`
 - Linux: `~/.config/helium`
+- Windows: `%LOCALAPPDATA%\imput\Helium\User Data`
 
-`DevToolsActivePort` contains two lines: the port, then the browser websocket path. Both change on every Helium restart, so always read the file fresh — never hardcode a `ws://` URL into configs or scripts.
+The file holds two lines: the port, then the browser WebSocket path. Both change whenever Helium restarts, so read the file fresh; never hardcode the URL.
 
-## playwright-cli: attach to the running Helium
+## Connect once
 
-macOS / Linux:
+Tell the user right before the first command: "Approve the 'Allow remote debugging?' prompt in Helium now."
 
 ```bash
-PROFILE="$HOME/Library/Application Support/net.imput.helium"  # Linux: "$HOME/.config/helium"
-WS="ws://127.0.0.1:$(sed -n 1p "$PROFILE/DevToolsActivePort")$(sed -n 2p "$PROFILE/DevToolsActivePort")"
-playwright-cli -s=helium attach --cdp="$WS"
+PROFILE="$HOME/Library/Application Support/net.imput.helium"   # Linux: "$HOME/.config/helium"
+export AGENT_BROWSER_CDP="ws://127.0.0.1:$(sed -n 1p "$PROFILE/DevToolsActivePort")$(sed -n 2p "$PROFILE/DevToolsActivePort")"
+export AGENT_BROWSER_SESSION=helium
+export AGENT_BROWSER_DEFAULT_TIMEOUT=120000   # leave the user time to approve
+agent-browser tab list                         # connects; the only prompt of the task
 ```
 
 Windows (PowerShell):
 
 ```powershell
 $lines = Get-Content "$env:LOCALAPPDATA\imput\Helium\User Data\DevToolsActivePort"
-playwright-cli -s=helium attach --cdp="ws://127.0.0.1:$($lines[0].Trim())$($lines[1].Trim())"
+$env:AGENT_BROWSER_CDP = "ws://127.0.0.1:$($lines[0].Trim())$($lines[1].Trim())"
+$env:AGENT_BROWSER_SESSION = "helium"
+$env:AGENT_BROWSER_DEFAULT_TIMEOUT = "120000"
+agent-browser tab list
 ```
 
-Then run all commands against the named session, e.g. `playwright-cli -s=helium snapshot`. When done, detach so Helium keeps running:
+`tab list` should show the user's real tabs. If it shows only a blank tab, you are not in their Helium.
 
-```bash
-playwright-cli -s=helium detach
-```
+**Keep the connection settings identical for every later command.** The daemon fingerprints its connection options; a command with a different or missing `AGENT_BROWSER_CDP` relaunches the daemon, which opens a new connection that Helium prompts for again or rejects with `403`. Shell state does not persist between agent tool calls, so put the same three `export` lines (re-reading the same file) at the start of every command. Use the environment variables rather than mixing them with `--cdp` or `--session` flags.
 
-Notes:
+Never retry a failed connection in a loop and never open extra "test" connections; each one is another prompt. On a failure, stop, follow Troubleshooting, and retry at most once after the user confirms.
 
-- `playwright-cli open --profile=<helium user-data dir>` cannot reuse the profile while Helium is running (Chromium profile lock). Attach is the only way to control the live browser.
-- The `-s=helium` session name is a convention; any name works, but a stable one makes scripts idempotent.
+## Working in the user's browser
 
-## Connection permissions
+- Open your own tabs with `agent-browser tab new <url>`. Do not use `open <url>` right after attaching: it navigates the user's current tab.
+- Close only tabs you opened: `agent-browser tab close <tN>`. Afterwards agent-browser re-selects one of the user's tabs, which can make that page reload.
+- Treat signed-in sessions as the user's own; act on accounts only as far as the task requires.
 
-New macOS CDP connections prompt “Allow remote debugging?” and time out in about 30 seconds. The user must approve the prompt directly. Read [connection diagnostics](references/connection-diagnostics.md) for prompt troubleshooting, raw WebSocket checks, and a wedged server.
+When done, run `agent-browser close`. For a CDP-attached browser this only disconnects, and Helium keeps running.
 
+## Troubleshooting
 
-## chrome-devtools-mcp: attach to the running Helium
+- **Timeout on the first command:** the prompt was not approved in time. Ask the user to dismiss any stale prompts and to approve the next one, then run the first command once more.
+- **`403 Forbidden`:** Helium refused an extra connection. Usually a later command ran with different connection settings and relaunched the daemon. Run `agent-browser close`, re-export the identical variables, and connect once more.
+- **`ECONNREFUSED`:** Helium is not running, is still starting, or restarted with a new port. Re-read `DevToolsActivePort` and connect again.
+- **No prompt appears and connecting hangs:** toggle remote debugging off and on at `helium://inspect/#remote-debugging`, or quit and relaunch Helium.
 
-`chrome-devtools-mcp` v1.2+ reads `DevToolsActivePort` itself when given `--autoConnect --userDataDir`, so a static MCP client config works across restarts (macOS example):
+## Other tools
 
-```json
-{
-  "mcpServers": {
-    "chrome-devtools": {
-      "command": "npx",
-      "args": [
-        "-y",
-        "chrome-devtools-mcp@latest",
-        "--autoConnect",
-        "--userDataDir",
-        "/Users/<user>/Library/Application Support/net.imput.helium"
-      ]
-    }
-  }
-}
-```
+Helium's debug server is WebSocket-only: its HTTP discovery endpoints (`/json/version`, `/json/list`) return 404, so any tool that needs an `http://` CDP URL cannot attach.
 
-Notes:
-
-- Helium must be running with remote debugging enabled; autoConnect never launches a browser.
-- If it fails with `Could not connect ... DevToolsActivePort`, re-toggle `helium://inspect/#remote-debugging`.
-- Avoid `--executablePath` alone: that launches a separate Helium instance with an isolated throwaway profile instead of attaching to the running one.
-
+- **playwright-cli** `attach --cdp=ws://…` works, but its 30-second attach timeout races the approval prompt, and each retry is another prompt. Prefer agent-browser.
+- **chrome-devtools-mcp** reaches Helium only when configured with `--autoConnect --userDataDir <Helium user-data dir>`. Otherwise it silently launches its own Chrome. Check that `list_pages` shows the user's tabs before acting.
+- Launching any tool with Helium's profile directory (`--profile`) fails while Helium runs because of the Chromium profile lock. Attaching is the only way to drive the live browser.
 
 ## Security note
 
-An open remote debugging port gives any local process full control of the browser (cookies, sessions, page content). Keep it bound to localhost (Helium's default) and be mindful of what runs locally while it is enabled.
+While remote debugging is enabled, any local process can connect to it and fully control the browser (cookies, sessions, page content). It stays bound to localhost by default; the user can turn it off at `helium://inspect/#remote-debugging` when not needed.

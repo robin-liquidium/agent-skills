@@ -118,16 +118,16 @@ npx skills add robin-liquidium/agent-skills@liquidium-borrow -g -y
 
 ### `helium-browser`
 
-Attach agent browser tooling (playwright-cli, chrome-devtools-mcp) to a running Helium browser with the real user profile.
+Drive a running Helium browser with its real tabs and logins using agent-browser over one approved CDP connection.
 
 ```bash
 npx skills add robin-liquidium/agent-skills@helium-browser -g -y
 ```
 
+- one connection per task, so the user approves Helium's "Allow remote debugging?" prompt once
 - WebSocket-only attach via `DevToolsActivePort` (Helium disables HTTP `/json/*` endpoints)
-- playwright-cli `attach --cdp=ws://...` one-liners per platform
-- chrome-devtools-mcp `--autoConnect --userDataDir` setup
-- per-platform Helium user-data directory paths
+- safe tab handling in the user's browser and disconnect without quitting Helium
+- troubleshooting for timeouts, `403`, and refused connections, plus per-platform paths
 
 ### `send-it`
 
