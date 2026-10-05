@@ -29,6 +29,8 @@ agent-browser tab list
 ## Tabs
 
 - Open your own tab with `agent-browser tab new <url>`. Do not use `open <url>` right after attaching: it navigates the user's current tab.
+- agent-browser follows the newest tab, including tabs the user opens while you work. Note your tab id after `tab new`, run `agent-browser tab <tN>` before each action, and check `agent-browser get url` before writing anything.
+- Switching tabs brings that tab to the front of the user's window (`Page.bringToFront`). Warn the user first, and wait if they are in a call or presenting.
 - Close only your tabs: `agent-browser tab close <tN>`. agent-browser then re-selects one of the user's tabs, which can make that page reload.
 
 ## Finish
