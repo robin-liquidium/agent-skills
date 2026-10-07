@@ -165,3 +165,7 @@ Generated local state should live outside the repo where practical: credentials 
 
 - The skills in this repo are optimized for real agent workflows, not polished end-user CLIs.
 - Keep changes minimal and keep each skill self-contained.
+
+## Shared source setup
+
+See [SKILL-SYNC.md](SKILL-SYNC.md) for synchronization and relative skill links.
