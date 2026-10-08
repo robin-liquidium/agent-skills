@@ -1,6 +1,6 @@
 ---
 name: telegram-cli
-description: "Read and search personal Telegram chats through Telethon; send, mark read, archive, or mute with explicit dry-run/execute approval."
+description: "Read and search personal Telegram chats through Telethon; send, edit own messages, mark read, archive, or mute with explicit dry-run/execute approval."
 allowed-tools: Bash(./scripts/telegram-readonly:*), Bash(./scripts/telegram-cli:*)
 ---
 
@@ -14,8 +14,9 @@ Use the local MTProto/Telethon script for the user's personal account; Telegram 
 - Write commands are dry-run by default and require `--execute`.
 - Never run any write command with `--execute` unless the user explicitly approved that specific action or batch first.
 - For `send`, present the draft first; `send --execute` requires approval of the final recipient and text.
+- For `edit`, show the new text first; `edit --execute` requires approval of the new text. Only the account's own messages can be edited, and Telegram marks them as edited.
 - Mark-read/archive/mute are still Telegram writes; use them only after the user has approved the batch/action.
-- Do not add edit/delete/bulk export/background automation unless the user explicitly asks.
+- Do not add delete/bulk export/background automation unless the user explicitly asks.
 - Treat the Telethon session like a high-privilege secret.
 - Assume unread preservation is best-effort until tested on a real chat.
 
@@ -101,6 +102,20 @@ Send only after the user approves final text and recipient:
 <skill-path>/scripts/telegram-cli send --chat '@username' --text 'Thanks, will check.' --execute
 ```
 
+### Edit a sent message
+
+Fix one of your own sent messages in place instead of sending a correction. The dry-run shows the current and new text:
+
+```bash
+<skill-path>/scripts/telegram-cli edit --chat '@username' --id 12345 --text 'Thanks, will check today.'
+```
+
+Edit only after the user approves the new text:
+
+```bash
+<skill-path>/scripts/telegram-cli edit --chat '@username' --id 12345 --text 'Thanks, will check today.' --execute
+```
+
 ### Mark read
 
 ```bash
@@ -162,7 +177,7 @@ Use the CLI for normal tasks. MCP compatibility code remains for existing consum
 ## When to stop and ask
 
 Stop and ask before:
-- sending a Telegram message
+- sending or editing a Telegram message
 - enabling any background watcher/daemon
 - broad exporting of large chat histories
 - changing how secrets/session storage works

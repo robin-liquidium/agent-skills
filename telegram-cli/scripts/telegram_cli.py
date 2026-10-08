@@ -439,13 +439,7 @@ async def cmd_send(args: argparse.Namespace) -> int:
     client = await build_client(settings)
     try:
         dialog = await resolve_dialog(client, args.chat)
-        text = args.text
-        if args.text_file:
-            if args.text:
-                raise SystemExit("Use only one of --text or --text-file")
-            text = Path(args.text_file).read_text()
-        if not text:
-            raise SystemExit("send requires --text or --text-file")
+        text = read_text_arg(args, "send")
 
         payload = action_payload(
             "send",
@@ -469,6 +463,50 @@ async def cmd_send(args: argparse.Namespace) -> int:
             "action": "send",
             "chat": dialog_to_dict(dialog),
             "message": message_to_dict(sent),
+        }, indent=2, ensure_ascii=False))
+        return 0
+    finally:
+        await disconnect_client(client)
+
+
+def read_text_arg(args: argparse.Namespace, command: str) -> str:
+    if args.text_file:
+        if args.text:
+            raise SystemExit("Use only one of --text or --text-file")
+        return Path(args.text_file).read_text()
+    if not args.text:
+        raise SystemExit(f"{command} requires --text or --text-file")
+    return args.text
+
+
+async def cmd_edit(args: argparse.Namespace) -> int:
+    settings = load_settings()
+    client = await build_client(settings)
+    try:
+        dialog = await resolve_dialog(client, args.chat)
+        text = read_text_arg(args, "edit")
+        message = await client.get_messages(dialog.entity, ids=args.id)
+        if message is None:
+            raise SystemExit(f"Message {args.id} not found in this chat")
+        if not message.out:
+            raise SystemExit(f"Message {args.id} was not sent by this account; only own messages can be edited")
+
+        payload = action_payload(
+            "edit",
+            dialog,
+            message_id=args.id,
+            current_text=message.message or "",
+            text=text,
+        )
+        if not print_dry_run_or_confirm(args, payload):
+            return 0
+
+        edited = await client.edit_message(dialog.entity, args.id, text, parse_mode=None)
+        print(json.dumps({
+            "ok": True,
+            "action": "edit",
+            "chat": dialog_to_dict(dialog),
+            "message": message_to_dict(edited),
         }, indent=2, ensure_ascii=False))
         return 0
     finally:
@@ -581,6 +619,7 @@ def cmd_help(args: argparse.Namespace) -> int:
         "notes": [
             "Write commands are dry-run by default and require --execute.",
             "Do not run send --execute unless the user explicitly approved the final text and recipient.",
+            "Do not run edit --execute unless the user explicitly approved the new text; only the account's own messages can be edited.",
             "dialogs --query uses token-based matching across name, username, and title.",
             "unread-dialogs and unread-dms exclude muted and archived chats by default.",
             "Dialog output includes is_user, is_group, is_channel, is_bot, archived, muted, and unread counts.",
@@ -593,6 +632,7 @@ def cmd_help(args: argparse.Namespace) -> int:
             "unread-dialogs": "List recent unread chats, excluding muted and archived by default.",
             "unread-dms": "List recent unread DM chats only, excluding muted and archived by default.",
             "send": "Dry-run or send a message to a chat. Requires --chat and --text/--text-file.",
+            "edit": "Dry-run or edit one of your own sent messages. Requires --chat, --id and --text/--text-file; dry-run shows current and new text.",
             "mark-read": "Dry-run or mark a chat read, optionally up to --max-id.",
             "archive": "Dry-run or archive/unarchive a chat.",
             "mute": "Dry-run or mute/unmute a chat.",
@@ -605,6 +645,7 @@ def cmd_help(args: argparse.Namespace) -> int:
             "./scripts/telegram-cli unread-dialogs --limit 10",
             "./scripts/telegram-cli unread-dms --limit 10 --include-muted",
             "./scripts/telegram-cli send --chat @username --text 'Thanks, will check.'",
+            "./scripts/telegram-cli edit --chat @username --id 12345 --text 'Thanks, will check today.'",
             "./scripts/telegram-cli mark-read --chat 123456789 --execute",
             "./scripts/telegram-cli archive --chat 123456789 --execute",
             "./scripts/telegram-cli mute --chat 123456789 --hours 8 --execute",
@@ -665,6 +706,13 @@ def build_parser() -> argparse.ArgumentParser:
     send.add_argument("--silent", action="store_true", help="Send without notification")
     send.add_argument("--execute", action="store_true", help="Actually send the message")
 
+    edit = sub.add_parser("edit", help="Dry-run or edit one of your own sent messages")
+    edit.add_argument("--chat", required=True, help="Chat id, username, phone, or title")
+    edit.add_argument("--id", required=True, type=int, help="Id of the message to edit")
+    edit.add_argument("--text", help="New message body")
+    edit.add_argument("--text-file", help="Read new message body from a local file")
+    edit.add_argument("--execute", action="store_true", help="Actually edit the message")
+
     mark_read = sub.add_parser("mark-read", help="Dry-run or mark a chat read")
     mark_read.add_argument("--chat", required=True, help="Chat id, username, phone, or title")
     mark_read.add_argument("--max-id", type=int, default=0, help="Only mark messages up to this message id")
@@ -706,6 +754,8 @@ async def run_command(args: argparse.Namespace, parser: argparse.ArgumentParser)
         return await cmd_unread_dialogs(args)
     if args.command == "send":
         return await cmd_send(args)
+    if args.command == "edit":
+        return await cmd_edit(args)
     if args.command == "mark-read":
         return await cmd_mark_read(args)
     if args.command == "archive":
