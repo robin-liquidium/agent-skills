@@ -11,7 +11,7 @@ Take intended changes through a reviewed, verified PR. Stop before merge unless 
 
 1. Inspect `git status --short --branch` and `git diff --stat`. Identify intended files and the PR base; clarify only an ambiguous target. Preserve unrelated dirty/untracked files.
 2. Create/switch to the topic branch before cleanup, review, or screenshots. Fetch `origin <base>` and compute the merge base against `origin/<base>`. Use fresh remote state for the actual PR diff; do not merge/rebase the base into the topic as part of this workflow.
-3. Check required tools/authentication up front: git, authenticated gh, reviewer CLIs (codex, coderabbit), a running local OpenCodex proxy with Kimi/Grok configured, TruffleHog, and repo hook/validation dependencies. Install or fix required dependencies before the loop; follow the review reference's unavailable-reviewer rules. On macOS, start `caffeinate -di &`, record its PID, and stop it at closeout.
+3. Check required tools/authentication up front: git, authenticated gh, reviewer CLIs (claude, codex, coderabbit), TruffleHog, and repo hook/validation dependencies. Install or fix required dependencies before the loop; follow the review reference's unavailable-reviewer rules. On macOS, start `caffeinate -di &`, record its PID, and stop it at closeout.
 4. Secret-scan intended files using the repo scanner (e.g. `pnpm secretlint`), or inspect for keys/tokens, env material, and dumps when none exists. Commit only intended tracked/untracked files; never `git add -A`.
 
 ## Clean and review
@@ -20,7 +20,7 @@ After the initial commit, inspect the full intended diff with `git diff --stat <
 
 Remove dead/duplicate code, unnecessary abstractions/helpers, debug scaffolding, accidental/generated noise, needless renames, and unrelated style churn. Preserve behavior, meaningful tests, edge cases, accessibility, security, and clarity. Run targeted checks and commit the cleanup. Allow at most two cleanup passes, then continue.
 
-Read and follow [review rounds](references/review-rounds.md) before invoking reviewers. It defines the exact bundled helper, secret preflight, four reviewers, model fallback rules, frozen heads, delta/full-diff phases, rejection ledger, accepted-risk disclosure, serial fix subagent, retries, and convergence limits. Do not substitute another skill's helper or run `codex review`.
+Read and follow [review rounds](references/review-rounds.md) before invoking reviewers. It defines the exact bundled helper, secret preflight, three reviewers (Claude Opus, Codex GPT sol, CodeRabbit), skip-if-unavailable rules, frozen heads, delta/full-diff phases, rejection ledger, accepted-risk disclosure, serial fix subagent, CodeRabbit retries, and convergence limits. Do not substitute another skill's helper or run `codex review`.
 
 Present accepted risks with reasons before creating the PR and again at closeout. Never report an errored, unavailable, rate-limited, or skipped review as clean.
 
@@ -38,7 +38,7 @@ Commit only intended files, push the topic branch, and create the PR with a conc
 
 1. Watch `gh pr checks <number> --repo <owner>/<repo> --watch --interval 20 2>&1 | tail -15`. Inspect the latest head, merge state, reviews, comments, and review threads after checks settle.
 2. After checks turn green, wait about 30 seconds and re-audit review threads (e.g. `gh api graphql` reviewThreads); bots can publish inline feedback later. A green status reporting “Review rate limited” does not prove a review occurred. Use completed local review evidence and disclose the coverage gap.
-3. Fix valid feedback locally, secret-scan new files, and commit intended fixes. Follow the same review reference, starting against `origin/<topic-branch>` (the pushed head), with CodeRabbit `-t committed`. Keep the ledger and model fallback/unavailability rules.
+3. Fix valid feedback locally, secret-scan new files, and commit intended fixes. Follow the same review reference, starting against `origin/<topic-branch>` (the pushed head), with CodeRabbit `-t committed`. Keep the ledger and the skip-if-unavailable rules.
 4. After a feedback round touching more than 3 files or about 50 lines, run a final full-branch review against `origin/<base>`; small fixes skip that extra round. Push, resolve fixed/outdated/false-positive threads, and resume CI checks for the new head.
 5. Continue until required CI is green and no actionable comments remain. Replace stale screenshots if UI behavior changed.
 
