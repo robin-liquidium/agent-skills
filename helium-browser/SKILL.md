@@ -7,15 +7,20 @@ description: "Drive the user's running Helium browser (real tabs, logins) over o
 
 Helium (https://helium.computer/) is a Chromium-based browser. Attach over CDP to control the user's live Helium with its real tabs, cookies, and logins.
 
-**Every new CDP connection makes Helium show an "Allow remote debugging?" prompt that the user must click.** Use exactly one connection per task, held open by the tool's daemon or server. Tell the user right before connecting so they can approve it. Never retry a failed connection in a loop or open extra "test" connections; each one is another prompt.
-
 ## Pick a tool
 
-Use the first one available, then read only its reference:
+Respect the user's requested browser and session requirements. Otherwise, use the first available option that can fulfil the task:
 
-1. **agent-browser** (`command -v agent-browser`): [references/agent-browser.md](references/agent-browser.md)
-2. **chrome-devtools-mcp** (an MCP server configured for Helium): [references/chrome-devtools-mcp.md](references/chrome-devtools-mcp.md)
-3. **playwright-cli** (`command -v playwright-cli`), only after checking its known issue: [references/playwright-cli.md](references/playwright-cli.md)
+1. **The current app's bundled browser tools**, when available and capable of fulfilling the request. Follow their own instructions.
+2. **agent-browser** (`command -v agent-browser`): [references/agent-browser.md](references/agent-browser.md)
+3. **chrome-devtools-mcp** (an MCP server configured for Helium): [references/chrome-devtools-mcp.md](references/chrome-devtools-mcp.md)
+4. **playwright-cli** (`command -v playwright-cli`), only after checking its known issue: [references/playwright-cli.md](references/playwright-cli.md)
+
+If bundled tools are unavailable, such as in a CLI session, use the Helium options above. If the task requires the user's existing Helium tabs, cookies, or signed-in accounts, use a tool that can access that session.
+
+For a Helium tool, read only its corresponding reference. The remaining CDP setup and connection instructions apply only when attaching to Helium.
+
+**Every new CDP connection makes Helium show an "Allow remote debugging?" prompt that the user must click.** Use exactly one connection per task, held open by the tool's daemon or server. Tell the user right before connecting so they can approve it. Never retry a failed connection in a loop or open extra "test" connections; each one is another prompt.
 
 ## Prerequisite
 
