@@ -169,6 +169,32 @@ class AutoreviewTestboxCredentialTests(unittest.TestCase):
                 AUTOREVIEW.safe_test_env(repo, root / "opt-in-home", copy_testbox_credentials=True)
                 self.assertEqual((root / "opt-in-home" / ".blacksmith" / "credentials").read_text(), "fixture")
 
+    def test_testbox_credential_copy_requires_confirmation(self) -> None:
+        def args(*extra: str) -> argparse.Namespace:
+            with mock.patch.object(sys, "argv", ["autoreview", *extra]):
+                return AUTOREVIEW.parse_args()
+
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            AUTOREVIEW.confirm_testbox_credentials(args())
+        self.assertEqual(stderr.getvalue(), "")
+
+        copy_flag = "--copy-testbox-credentials"
+        with mock.patch.object(sys.stdin, "isatty", return_value=False), contextlib.redirect_stderr(stderr):
+            with self.assertRaisesRegex(SystemExit, "confirm-expose-testbox-credentials"):
+                AUTOREVIEW.confirm_testbox_credentials(args(copy_flag))
+        self.assertIn("repository-controlled", stderr.getvalue())
+
+        with mock.patch.object(sys.stdin, "isatty", return_value=False), contextlib.redirect_stderr(io.StringIO()):
+            AUTOREVIEW.confirm_testbox_credentials(args(copy_flag, "--confirm-expose-testbox-credentials"))
+
+        with mock.patch.object(sys.stdin, "isatty", return_value=True), contextlib.redirect_stderr(io.StringIO()):
+            with mock.patch("builtins.input", return_value=""):
+                with self.assertRaisesRegex(SystemExit, "aborted"):
+                    AUTOREVIEW.confirm_testbox_credentials(args(copy_flag))
+            with mock.patch("builtins.input", return_value="y"):
+                AUTOREVIEW.confirm_testbox_credentials(args(copy_flag))
+
 
 def init_fixture_repo(repo: Path) -> None:
     for command in [["init", "-q"], ["config", "user.email", "fixture@example.invalid"], ["config", "user.name", "Fixture"]]:

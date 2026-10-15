@@ -1368,6 +1368,31 @@ def copy_blacksmith_testbox_credentials(
     target.chmod(0o600)
 
 
+def confirm_testbox_credentials(args: argparse.Namespace) -> None:
+    """Warn and require confirmation before exposing Testbox credentials to tests."""
+    if not args.copy_testbox_credentials:
+        return
+    print(
+        "WARNING: --copy-testbox-credentials copies ~/.blacksmith/credentials into the "
+        "--parallel-tests home. The tests are repository-controlled code and can read, "
+        "use or exfiltrate these credentials.",
+        file=sys.stderr,
+    )
+    if args.confirm_expose_testbox_credentials:
+        return
+    if not sys.stdin.isatty():
+        raise SystemExit(
+            "refusing --copy-testbox-credentials without confirmation; "
+            "add --confirm-expose-testbox-credentials for non-interactive runs"
+        )
+    try:
+        answer = input("Expose Testbox credentials to these tests? [y/N] ")
+    except EOFError:
+        answer = ""
+    if answer.strip().lower() not in {"y", "yes"}:
+        raise SystemExit("aborted: Testbox credentials not confirmed")
+
+
 def safe_test_env(
     repo: Path, isolated_home: Path, *, copy_testbox_credentials: bool = False
 ) -> dict[str, str]:
@@ -12122,7 +12147,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--copy-testbox-credentials",
         action="store_true",
-        help="Opt-in: with OPENCLAW_TESTBOX set, copy ~/.blacksmith/credentials into the isolated --parallel-tests home. Off by default; use only when the user approves.",
+        help="Opt-in: with OPENCLAW_TESTBOX set, copy ~/.blacksmith/credentials into the isolated --parallel-tests home, exposing them to repository-controlled tests. Off by default; asks for confirmation (non-interactive runs also need --confirm-expose-testbox-credentials). Use only when the user approves.",
+    )
+    parser.add_argument(
+        "--confirm-expose-testbox-credentials",
+        action="store_true",
+        help="Non-interactive confirmation for --copy-testbox-credentials.",
     )
     parser.add_argument(
         "--parallel-tests-shell",
@@ -12785,6 +12815,7 @@ def main() -> int:
         return self_test_engine_isolation()
     if args.self_test_json_array_parser:
         return self_test_json_array_parser()
+    confirm_testbox_credentials(args)
     reviewers = reviewer_args(args)
     repo = repo_root()
     reject_repo_output_paths(args, repo)
