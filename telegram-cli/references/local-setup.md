@@ -27,7 +27,23 @@ Primary config path:
 ~/.config/telegram-cli/config.json
 ```
 
-On a Linux host with `~/.config/credentials.encrypted/telegram-mcp-tunnel.env.cred`, the launcher can instead load Telegram credentials from that systemd encrypted credential through the host's `with-systemd-env-credential` helper. The plaintext config is not required in that setup.
+### Optional: systemd encrypted credential (Linux, opt-in)
+
+By default the launcher only uses `config.json` or exported `TELEGRAM_*` variables. It loads credentials from a systemd encrypted credential only when the user sets both of these explicitly (for example in their shell profile):
+
+```bash
+export TELEGRAM_CLI_ENCRYPTED_CREDENTIAL="$HOME/.config/credentials.encrypted/telegram-mcp-tunnel.env.cred"
+# Optional; this is the default helper path:
+export TELEGRAM_CLI_CREDENTIAL_LOADER="$HOME/.local/libexec/with-systemd-env-credential"
+```
+
+Services and timers don't read shell profiles, so the same opt-in can also be a file: put the credential path on the first line of `~/.config/telegram-cli/encrypted-credential`:
+
+```bash
+mkdir -p ~/.config/telegram-cli && printf '%s\n' "$HOME/.config/credentials.encrypted/telegram-mcp-tunnel.env.cred" > ~/.config/telegram-cli/encrypted-credential
+```
+
+The helper is not part of this skill: it must already exist on the host, take a credential name and a command, and export the credential's env lines before running the command. When enabled and no plaintext credentials are present, the launcher re-runs itself in a transient `systemd-run --user` unit with `LoadCredentialEncrypted=`, so the plaintext config is not required. Unset the variable or delete the file to turn this off.
 
 Recommended one-time setup:
 

@@ -12,7 +12,7 @@ done
 if [[ "$last_arg" == "--execute" ]]; then
   case "$command_name" in
     send|mark-read|archive|mute)
-      printf '%s\n' "$command_name" >> "${MOCK_EXECUTE_LOG:?}"
+      printf '%s %s\n' "$command_name" "$*" >> "${MOCK_EXECUTE_LOG:?}"
       printf '{"ok":true,"action":"%s"}\n' "$command_name"
       exit 0
       ;;
@@ -28,6 +28,10 @@ case "$command_name" in
     printf '[{"id":1,"name":"Mock Chat"}]\n'
     ;;
   send)
+    if [[ "${2:-}" == "No Id Chat" ]]; then
+      printf '{"dry_run":true,"action":"send","chat":{"name":"No Id Chat"},"text":"mock"}\n'
+      exit 0
+    fi
     printf '{"dry_run":true,"action":"send","chat":{"id":1,"name":"Mock Chat"},"text":"mock"}\n'
     ;;
   mark-read|archive|mute)

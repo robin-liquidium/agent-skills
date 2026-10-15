@@ -2,15 +2,16 @@
 
 import { execFile } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { homedir } from "node:os";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 
 const execFileAsync = promisify(execFile);
-const TELEGRAM_CLI = process.env.TELEGRAM_CLI_PATH
-  || `${homedir()}/skills/agent-skills/telegram-cli/scripts/telegram-cli`;
+const SKILL_DIR = join(dirname(fileURLToPath(import.meta.url)), "..");
+const TELEGRAM_CLI = process.env.TELEGRAM_CLI_PATH || join(SKILL_DIR, "scripts", "telegram-cli");
 const APPROVAL_TTL_MS = 10 * 60 * 1000;
 const approvals = new Map();
 
@@ -126,16 +127,25 @@ function pruneApprovals() {
   }
 }
 
-async function prepareAction(action, cliArgs) {
+// buildArgs(chat) returns the CLI args for a chat selector. The preview resolves
+// the user's selector once; execution is frozen to the resolved numeric chat id
+// and the CLI refuses to write if it resolves to anything else.
+async function prepareAction(action, chat, buildArgs) {
   pruneApprovals();
-  const preview = await runCli(cliArgs);
+  const preview = await runCli(buildArgs(chat));
+  const chatId = preview?.chat?.id;
+  if (!Number.isSafeInteger(chatId)) {
+    throw new Error("Preview did not resolve a numeric chat id; nothing was prepared.");
+  }
+  const cliArgs = [...buildArgs(String(chatId)), "--require-chat-id", String(chatId)];
   const token = randomBytes(24).toString("base64url");
   const expiresAt = Date.now() + APPROVAL_TTL_MS;
-  approvals.set(token, { action, cliArgs: [...cliArgs], preview, expiresAt });
+  approvals.set(token, { action, chatId, cliArgs, preview, expiresAt });
   return response({
     approval_required: true,
     instruction: "Show this exact preview to the user and wait for a new message explicitly approving it. Do not execute in the same model turn.",
     action,
+    resolved_chat_id: chatId,
     preview,
     approval_token: token,
     expires_at: new Date(expiresAt).toISOString(),
@@ -230,10 +240,12 @@ server.registerTool("telegram_prepare_send", {
   annotations: previewAnnotations,
   _meta: noAuthMeta("Preparing Telegram message…", "Telegram message preview ready"),
 }, async ({ chat, text, replyTo, silent }) => {
-  const args = ["send", "--chat", chat, "--text", text];
-  if (replyTo !== undefined) args.push("--reply-to", String(replyTo));
-  if (silent) args.push("--silent");
-  return prepareAction("send", args);
+  return prepareAction("send", chat, (target) => {
+    const args = ["send", "--chat", target, "--text", text];
+    if (replyTo !== undefined) args.push("--reply-to", String(replyTo));
+    if (silent) args.push("--silent");
+    return args;
+  });
 });
 
 server.registerTool("telegram_prepare_mark_read", {
@@ -248,10 +260,12 @@ server.registerTool("telegram_prepare_mark_read", {
   annotations: previewAnnotations,
   _meta: noAuthMeta("Preparing mark-read action…", "Mark-read preview ready"),
 }, async ({ chat, maxId, clearMentions, clearReactions }) => {
-  const args = ["mark-read", "--chat", chat, "--max-id", String(maxId)];
-  if (clearMentions) args.push("--clear-mentions");
-  if (clearReactions) args.push("--clear-reactions");
-  return prepareAction("mark-read", args);
+  return prepareAction("mark-read", chat, (target) => {
+    const args = ["mark-read", "--chat", target, "--max-id", String(maxId)];
+    if (clearMentions) args.push("--clear-mentions");
+    if (clearReactions) args.push("--clear-reactions");
+    return args;
+  });
 });
 
 server.registerTool("telegram_prepare_archive", {
@@ -264,9 +278,11 @@ server.registerTool("telegram_prepare_archive", {
   annotations: previewAnnotations,
   _meta: noAuthMeta("Preparing archive action…", "Archive preview ready"),
 }, async ({ chat, unarchive }) => {
-  const args = ["archive", "--chat", chat];
-  if (unarchive) args.push("--unarchive");
-  return prepareAction(unarchive ? "unarchive" : "archive", args);
+  return prepareAction(unarchive ? "unarchive" : "archive", chat, (target) => {
+    const args = ["archive", "--chat", target];
+    if (unarchive) args.push("--unarchive");
+    return args;
+  });
 });
 
 const muteInputSchema = z.object({
@@ -290,11 +306,13 @@ server.registerTool("telegram_prepare_mute", {
   annotations: previewAnnotations,
   _meta: noAuthMeta("Preparing mute action…", "Mute preview ready"),
 }, async ({ chat, unmute, hours, until }) => {
-  const args = ["mute", "--chat", chat];
-  if (unmute) args.push("--unmute");
-  if (hours !== undefined) args.push("--hours", String(hours));
-  if (until !== undefined) args.push("--until", until);
-  return prepareAction(unmute ? "unmute" : "mute", args);
+  return prepareAction(unmute ? "unmute" : "mute", chat, (target) => {
+    const args = ["mute", "--chat", target];
+    if (unmute) args.push("--unmute");
+    if (hours !== undefined) args.push("--hours", String(hours));
+    if (until !== undefined) args.push("--until", until);
+    return args;
+  });
 });
 
 server.registerTool("telegram_execute_prepared_action", {
@@ -319,6 +337,7 @@ server.registerTool("telegram_execute_prepared_action", {
   return response({
     ok: Boolean(result?.ok),
     action: approval.action,
+    chat_id: approval.chatId,
     result,
     approval_token_consumed: true,
   });

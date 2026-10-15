@@ -119,6 +119,25 @@ class DialogResolutionTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(await cli.async_main(), 0)
 
 
+class RequireChatIdTests(unittest.TestCase):
+    def test_mismatched_chat_id_aborts_before_write(self):
+        payload = cli.action_payload("send", dialog(1, "12345"), text="hi")
+        args = SimpleNamespace(execute=True, require_chat_id=12345)
+        with self.assertRaisesRegex(SystemExit, "does not match --require-chat-id"):
+            cli.print_dry_run_or_confirm(args, payload)
+
+    def test_matching_chat_id_allows_execute(self):
+        payload = cli.action_payload("send", dialog(-100123, "Group"), text="hi")
+        args = SimpleNamespace(execute=True, require_chat_id=-100123)
+        self.assertTrue(cli.print_dry_run_or_confirm(args, payload))
+
+    def test_parser_accepts_require_chat_id_on_writes(self):
+        parser = cli.build_parser()
+        for argv in (["send", "--chat", "1", "--text", "x"], ["edit", "--chat", "1", "--id", "2", "--text", "x"],
+                     ["mark-read", "--chat", "1"], ["archive", "--chat", "1"], ["mute", "--chat", "1"]):
+            self.assertEqual(parser.parse_args([*argv, "--require-chat-id", "-5"]).require_chat_id, -5)
+
+
 class TimeoutReportingTests(unittest.TestCase):
     def test_timeout_reports_write_uncertainty(self):
         async def timed_out():
@@ -150,8 +169,9 @@ class LauncherCleanupTests(unittest.TestCase):
             runner = bin_dir / "systemd-run"
             runner.write_text("#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$HOME/run.args\"\ncat\n")
             runner.chmod(0o700)
-            env = {**os.environ, "HOME": str(home), "PATH": f"{bin_dir}:{os.environ['PATH']}"}
-            for key in ("TELEGRAM_API_ID", "TELEGRAM_API_HASH", "TELEGRAM_SESSION_STRING"):
+            env = {**os.environ, "HOME": str(home), "PATH": f"{bin_dir}:{os.environ['PATH']}",
+                   "TELEGRAM_CLI_ENCRYPTED_CREDENTIAL": str(credential)}
+            for key in ("TELEGRAM_API_ID", "TELEGRAM_API_HASH", "TELEGRAM_SESSION_STRING", "TELEGRAM_CLI_CREDENTIAL_LOADER"):
                 env.pop(key, None)
             result = subprocess.run([str(SKILL_DIR / "scripts/telegram-cli"), "auth", "${LITERAL}"],
                                     input="piped marker\n", text=True, capture_output=True, env=env, check=False)
@@ -190,7 +210,8 @@ class LauncherCleanupTests(unittest.TestCase):
             (bin_dir / "python3").write_text("#!/bin/sh\nprintf '%s\\n' \"$@\"\n")
             (bin_dir / "python3").chmod(0o700)
             env = {**os.environ, "HOME": str(home), "PATH": f"{bin_dir}:{os.environ['PATH']}",
-                   "TELEGRAM_API_ID": "123", "TELEGRAM_API_HASH": "hash"}
+                   "TELEGRAM_API_ID": "123", "TELEGRAM_API_HASH": "hash",
+                   "TELEGRAM_CLI_ENCRYPTED_CREDENTIAL": str(credential)}
             for args in (("auth",), ("messages", "--chat", "1")):
                 case_env = dict(env)
                 if args[0] != "auth":
@@ -199,6 +220,31 @@ class LauncherCleanupTests(unittest.TestCase):
                                         text=True, capture_output=True, env=case_env, check=False)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertIn(str(SKILL_DIR / "scripts/telegram_cli.py"), result.stdout)
+
+    def test_encrypted_credential_requires_explicit_opt_in(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            credential = home / ".config/credentials.encrypted/telegram-mcp-tunnel.env.cred"
+            credential.parent.mkdir(parents=True)
+            credential.touch()
+            loader = home / ".local/libexec/with-systemd-env-credential"
+            loader.parent.mkdir(parents=True)
+            loader.write_text("#!/bin/sh\nexit 0\n")
+            loader.chmod(0o700)
+            bin_dir = home / "bin"
+            bin_dir.mkdir()
+            (bin_dir / "systemd-run").write_text("#!/bin/sh\nexit 99\n")
+            (bin_dir / "systemd-run").chmod(0o700)
+            (bin_dir / "python3").write_text("#!/bin/sh\nprintf '%s\\n' \"$@\"\n")
+            (bin_dir / "python3").chmod(0o700)
+            env = {**os.environ, "HOME": str(home), "PATH": f"{bin_dir}:{os.environ['PATH']}"}
+            for key in ("TELEGRAM_API_ID", "TELEGRAM_API_HASH", "TELEGRAM_SESSION_STRING",
+                        "TELEGRAM_CLI_ENCRYPTED_CREDENTIAL", "TELEGRAM_CLI_CREDENTIAL_LOADER"):
+                env.pop(key, None)
+            result = subprocess.run([str(SKILL_DIR / "scripts/telegram-cli"), "messages", "--chat", "1"],
+                                    text=True, capture_output=True, env=env, check=False)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn(str(SKILL_DIR / "scripts/telegram_cli.py"), result.stdout)
 
     def test_termination_stops_transient_unit(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -228,6 +274,7 @@ class LauncherCleanupTests(unittest.TestCase):
             )
             systemctl.chmod(0o700)
             env = dict(os.environ, HOME=str(home), PATH=f"{bin_dir}:{os.environ['PATH']}",
+                       TELEGRAM_CLI_ENCRYPTED_CREDENTIAL=str(credential),
                        MOCK_RUN_PID_FILE=str(run_pid_file), MOCK_RUN_ARGS_FILE=str(run_args_file),
                        MOCK_STOP_LOG=str(stop_log))
             process = subprocess.Popen([str(SKILL_DIR / "scripts/telegram-cli"), "messages", "--chat", "123"], env=env)

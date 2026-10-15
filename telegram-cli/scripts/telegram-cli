@@ -3,10 +3,19 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-encrypted_credential="${HOME}/.config/credentials.encrypted/telegram-mcp-tunnel.env.cred"
-credential_loader="${HOME}/.local/libexec/with-systemd-env-credential"
+# Optional, opt-in only: load credentials from a systemd encrypted credential
+# through a host-provided helper. Unused unless the user configured it, either with
+# TELEGRAM_CLI_ENCRYPTED_CREDENTIAL or with the path on the first line of
+# ~/.config/telegram-cli/encrypted-credential (works for services that don't read
+# shell profiles); see references/local-setup.md.
+encrypted_credential="${TELEGRAM_CLI_ENCRYPTED_CREDENTIAL:-}"
+if [[ -z "$encrypted_credential" && -r "${HOME}/.config/telegram-cli/encrypted-credential" ]]; then
+  IFS= read -r encrypted_credential < "${HOME}/.config/telegram-cli/encrypted-credential" || true
+  encrypted_credential="${encrypted_credential/#\~/$HOME}"
+fi
+credential_loader="${TELEGRAM_CLI_CREDENTIAL_LOADER:-${HOME}/.local/libexec/with-systemd-env-credential}"
 config_has_credentials=0
-if [[ -r "$encrypted_credential" && -r "${HOME}/.config/telegram-cli/config.json" ]] && \
+if [[ -n "$encrypted_credential" && -r "$encrypted_credential" && -r "${HOME}/.config/telegram-cli/config.json" ]] && \
   python3 - "${HOME}/.config/telegram-cli/config.json" "${1:-}" <<'PYCONFIG'
 import json
 import sys
@@ -26,6 +35,7 @@ if [[ "${TELEGRAM_CLI_SECURE_REEXEC:-}" != "1" \
   && "$config_has_credentials" != "1" \
   && !( -n "${TELEGRAM_API_ID:-}" && -n "${TELEGRAM_API_HASH:-}" \
     && ( "${1:-}" == "auth" || -n "${TELEGRAM_SESSION_STRING:-}" ) ) \
+  && -n "$encrypted_credential" \
   && -r "$encrypted_credential" \
   && -x "$credential_loader" \
   && -x "$(command -v systemd-run 2>/dev/null || true)" ]]; then

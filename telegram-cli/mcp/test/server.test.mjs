@@ -40,6 +40,13 @@ try {
   });
   assert.equal(prepared.isError, undefined);
   const token = prepared.structuredContent.result.approval_token;
+  assert.equal(prepared.structuredContent.result.resolved_chat_id, 1);
+
+  const unresolved = await client.callTool({
+    name: "telegram_prepare_send",
+    arguments: { chat: "No Id Chat", text: "hello" },
+  });
+  assert.equal(unresolved.isError, true);
   assert.ok(token.length >= 20);
 
   await assert.rejects(readFile(executeLog, "utf8"));
@@ -56,7 +63,9 @@ try {
   });
   assert.equal(executed.isError, undefined);
   const executeLogAfterFirstUse = (await readFile(executeLog, "utf8")).trim();
-  assert.equal(executeLogAfterFirstUse, "send");
+  // Execution is frozen to the resolved numeric chat id, not the mutable title.
+  assert.equal(executeLogAfterFirstUse, "send --chat 1 --text hello --require-chat-id 1 --execute");
+  assert.equal(executed.structuredContent.result.chat_id, 1);
 
   const reused = await client.callTool({
     name: "telegram_execute_prepared_action",

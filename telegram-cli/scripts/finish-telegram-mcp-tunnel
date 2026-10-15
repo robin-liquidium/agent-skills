@@ -1,5 +1,24 @@
 #!/usr/bin/env bash
+# LEGACY / OPTIONAL. Not part of normal telegram-cli setup.
+#
+# Configures OpenAI's tunnel-client so ChatGPT can reach the local Telegram MCP
+# server (read tools plus approval-gated writes on the user's personal Telegram
+# account) remotely, and enables an always-on, auto-restarting systemd user
+# service (telegram-mcp-tunnel.service). Run it only when the user explicitly
+# wants that remote access. Remove it with:
+#   systemctl --user disable --now telegram-mcp-tunnel.service
+#   rm -f ~/.config/openai-tunnel-telegram/runtime.env
 set -euo pipefail
+
+confirm_flag="--enable-always-on-tunnel"
+if [[ "${1:-}" != "$confirm_flag" ]]; then
+  echo "This legacy helper exposes the local Telegram MCP server (reads and approval-gated" >&2
+  echo "writes on your personal Telegram account) to ChatGPT through OpenAI's tunnel, and" >&2
+  echo "enables an always-on systemd user service that restarts automatically." >&2
+  echo "It is optional and not needed for normal telegram-cli use." >&2
+  echo "To proceed, re-run with: $0 $confirm_flag" >&2
+  exit 2
+fi
 
 tunnel_client="$HOME/.local/bin/tunnel-client"
 mcp_launcher="$HOME/.local/bin/telegram-cli-mcp"
@@ -23,16 +42,24 @@ fi
 printf 'Restricted runtime API key (input hidden): '
 IFS= read -r -s runtime_key
 printf '\n'
-if [[ -z "$runtime_key" ]]; then
-  echo "The runtime API key cannot be empty." >&2
+# Keys are plain tokens; reject anything else so runtime.env stays inert data.
+if [[ ! "$runtime_key" =~ ^[A-Za-z0-9_-]{20,512}$ ]]; then
+  echo "The runtime API key must be 20-512 characters of A-Z, a-z, 0-9, '_' or '-'." >&2
+  exit 1
+fi
+
+printf 'Enable an always-on tunnel service giving ChatGPT access to this Telegram account? [y/N] '
+IFS= read -r answer
+if [[ "$answer" != "y" && "$answer" != "Y" ]]; then
+  echo "Aborted; nothing was changed." >&2
   exit 1
 fi
 
 mkdir -p "$runtime_dir"
 chmod 700 "$runtime_dir"
 umask 077
+# Read by systemd's EnvironmentFile= as data; never sourced as shell code.
 printf 'CONTROL_PLANE_API_KEY=%s\n' "$runtime_key" > "$runtime_env"
-unset runtime_key
 
 "$tunnel_client" init \
   --sample sample_mcp_stdio_local \
@@ -41,11 +68,6 @@ unset runtime_key
   --tunnel-id "$tunnel_id" \
   --mcp-command "$mcp_launcher" \
   --health-listen-addr 127.0.0.1:8766
-
-set -a
-# shellcheck disable=SC1090
-source "$runtime_env"
-set +a
 
 systemctl --user daemon-reload
 service_stopped=false
@@ -61,8 +83,8 @@ if systemctl --user is-active --quiet "$service_name"; then
   service_stopped=true
 fi
 
-"$tunnel_client" doctor --profile "$profile_name" --explain
-unset CONTROL_PLANE_API_KEY
+CONTROL_PLANE_API_KEY="$runtime_key" "$tunnel_client" doctor --profile "$profile_name" --explain
+unset runtime_key
 
 systemctl --user enable --now "$service_name"
 service_stopped=false
@@ -73,6 +95,7 @@ for _ in 1 2 3 4 5; do
     echo "Telegram CLI MCP tunnel is running and ready."
     echo "Tunnel ID: $tunnel_id"
     echo "Add it in ChatGPT: https://chatgpt.com/plugins"
+    echo "Disable later: systemctl --user disable --now $service_name"
     exit 0
   fi
   sleep 1

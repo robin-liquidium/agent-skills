@@ -1,3 +1,8 @@
+# LEGACY / OPTIONAL: exposes the local Telegram MCP server to ChatGPT through
+# OpenAI's tunnel-client (~/.local/bin/tunnel-client, not shipped with this skill).
+# Installed only via scripts/finish-telegram-mcp-tunnel --enable-always-on-tunnel
+# after explicit user approval. Not needed for the CLI.
+# Remove: systemctl --user disable --now telegram-mcp-tunnel.service
 [Unit]
 Description=OpenAI Secure MCP Tunnel for Telegram CLI
 After=network-online.target
