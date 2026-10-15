@@ -22,9 +22,9 @@ Preprocessing can help noisy JPEGs or raster images with speckles, compression a
 
 ## SVG Optimization
 
-The wrapper optimizes SVG output with SVGO by default when `svgo` or `npx` is available. This is separate from tracing accuracy: SVGO removes XML overhead and rewrites paths without intentionally changing the artwork.
+The wrapper optimizes SVG output with SVGO by default when a local `svgo` is installed; otherwise it skips optimization with a note. It never runs `npx` or downloads packages. This is separate from tracing accuracy: SVGO removes XML overhead and rewrites paths without intentionally changing the artwork.
 
-Use `--optimize-svg none` when raw VTracer output is needed. Use `--optimize-svg svgo` when optimization must happen and should fail loudly if neither `svgo` nor `npx` is available.
+Use `--optimize-svg none` when raw VTracer output is needed. Use `--optimize-svg svgo` when optimization must happen and should fail loudly if `svgo` is not installed.
 
 Use `--svgo-precision 0` for simple website assets when file size matters. This can dramatically reduce path-data decimals while preserving smooth spline curves. Use a higher precision if curves or tiny details visibly shift.
 

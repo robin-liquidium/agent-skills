@@ -344,7 +344,7 @@ def render_preview(magick_bin: str, svg: Path, output: Path) -> str | None:
 
 
 def svgo_command(optimize_mode: str, svgo_bin: str | None) -> list[str] | None:
-    """Resolve an SVGO command, optionally falling back to npx."""
+    """Resolve a locally installed SVGO command. Never downloads packages."""
 
     if optimize_mode == "none":
         return None
@@ -352,20 +352,17 @@ def svgo_command(optimize_mode: str, svgo_bin: str | None) -> list[str] | None:
         resolved = tool_path(svgo_bin)
         if not resolved:
             raise ToolError(f"`{svgo_bin}` was requested for SVG optimization but was not found.")
-        if Path(resolved).name == "npx":
-            return [resolved, "--yes", "svgo"]
+        if Path(resolved).name in {"npx", "npm", "pnpm", "yarn", "bunx", "bun"}:
+            raise ToolError("--svgo-bin must point to an installed `svgo`, not a package runner.")
         return [resolved]
 
     resolved_svgo = tool_path("svgo")
     if resolved_svgo:
         return [resolved_svgo]
 
-    resolved_npx = tool_path("npx")
-    if resolved_npx:
-        return [resolved_npx, "--yes", "svgo"]
-
     if optimize_mode == "svgo":
-        raise ToolError("SVG optimization requested, but neither `svgo` nor `npx` was found.")
+        raise ToolError("SVG optimization requested, but `svgo` is not installed. Install it first (e.g. `npm install -g svgo`).")
+    print("note: `svgo` not installed; skipping SVG optimization.", file=sys.stderr)
     return None
 
 
@@ -498,7 +495,7 @@ def run_variant(
     run_command(vtracer_command(vtracer_bin, trace_source, output_svg, profile), quiet=True)
     optimization = optimize_svg(output_svg, optimize_mode, svgo_bin, profile.svgo_precision)
 
-    preview_path = output_svg.with_suffix(".png")
+    preview_path = output_svg.with_name(f"{output_svg.stem}.preview.png")
     preview_error: str | None = None
     if preview_mode != "never":
         if magick_bin:
@@ -552,9 +549,9 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         "--optimize-svg",
         choices=("auto", "none", "svgo"),
         default="auto",
-        help="Optimize SVG output with SVGO. Auto uses `svgo` or `npx --yes svgo` when available.",
+        help="Optimize SVG output with a locally installed SVGO. Auto skips optimization if `svgo` is missing.",
     )
-    parser.add_argument("--svgo-bin", help="SVGO executable path/name. Use `npx` to force npx-based SVGO.")
+    parser.add_argument("--svgo-bin", help="Installed SVGO executable path/name.")
     parser.add_argument("--svgo-precision", type=int, help="Override SVGO numeric precision.")
     parser.add_argument("--mode", choices=("pixel", "polygon", "spline"), help="Override VTracer curve fitting mode.")
     parser.add_argument(
@@ -613,6 +610,14 @@ def main(argv: list[str] | None = None) -> int:
             )
         ]
 
+    for _, should_preprocess, output_svg in variants:
+        generated = [output_svg, output_svg.with_name(f"{output_svg.stem}.preview.png")]
+        if should_preprocess:
+            generated.append(output_svg.with_name(f"{output_svg.stem}.quantized-input.png"))
+        for path in generated:
+            if path.expanduser().resolve() == source:
+                raise ToolError(f"Refusing to overwrite the input image: {path} is the input. Choose another --output/--out-dir.")
+
     for name, should_preprocess, output_svg in variants:
         report["variants"].append(
             run_variant(
@@ -631,6 +636,8 @@ def main(argv: list[str] | None = None) -> int:
         )
 
     report_path = args.report or out_dir / f"{stem}.vectorize-report.json"
+    if report_path.expanduser().resolve() == source:
+        raise ToolError(f"Refusing to overwrite the input image with the report: {source}")
     write_report(report_path, report)
     print(json.dumps({"report": str(report_path), "variants": report["variants"]}, indent=2))
     return 0

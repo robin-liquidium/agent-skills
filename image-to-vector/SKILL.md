@@ -7,7 +7,7 @@ description: "Vectorize raster artwork into SVG with VTracer, optional ImageMagi
 
 ## Overview
 
-Use `<skill-path>/scripts/vectorize-image.py` to convert raster images into SVGs. The wrapper uses VTracer for tracing, can optionally preprocess noisy images with ImageMagick, can render PNG previews, and can optimize SVGs with SVGO when `svgo` or `npx` is available.
+Use `<skill-path>/scripts/vectorize-image.py` to convert raster images into SVGs. The wrapper uses VTracer for tracing, can optionally preprocess noisy images with ImageMagick, can render PNG previews (`<name>.preview.png`, never over the input), and can optimize SVGs with a locally installed SVGO.
 
 The CLI is intentionally generic: start with a built-in profile, then override tracing or optimization settings when the input needs a different tradeoff.
 
@@ -15,7 +15,7 @@ The CLI is intentionally generic: start with a built-in profile, then override t
 
 - `vtracer` is required.
 - `magick` from ImageMagick is optional, but needed for `--preprocess quantize` and PNG previews.
-- `svgo` or `npx` is optional, but recommended for smaller SVG output.
+- `svgo` is optional, but recommended for smaller SVG output. The wrapper never downloads it (no `npx` fallback); without it, optimization is skipped with a note.
 
 Install VTracer with:
 
