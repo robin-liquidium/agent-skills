@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 import argparse
 import asyncio
+import contextlib
 import getpass
 import json
 import os
 import stat
 import sys
+import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -73,9 +75,23 @@ def load_raw_config() -> dict[str, Any]:
     return data
 
 
+def ensure_config_dir() -> None:
+    CONFIG_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
+    CONFIG_DIR.chmod(stat.S_IRWXU)
+
+
 def save_config(data: dict[str, Any]) -> None:
-    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    CONFIG_PATH.write_text(json.dumps(data, indent=2) + "\n")
+    ensure_config_dir()
+    # mkstemp creates the file 0600, so the session string is never readable by others.
+    fd, tmp = tempfile.mkstemp(dir=CONFIG_DIR, prefix=".config.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w") as handle:
+            handle.write(json.dumps(data, indent=2) + "\n")
+        os.replace(tmp, CONFIG_PATH)
+    except BaseException:
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(tmp)
+        raise
     chmod_600(CONFIG_PATH)
 
 
@@ -254,7 +270,7 @@ async def cmd_auth(args: argparse.Namespace) -> int:
         raise SystemExit("auth requires TELEGRAM_API_ID and TELEGRAM_API_HASH or --api-id/--api-hash")
     api_id = int(api_id_raw)
 
-    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    ensure_config_dir()
     client = TelegramClient(StringSession(raw.get("session_string", "")), api_id, api_hash)
 
     async def phone() -> str:

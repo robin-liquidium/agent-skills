@@ -297,5 +297,23 @@ class LauncherCleanupTests(unittest.TestCase):
                     process.wait()
 
 
+class ConfigPermissionTests(unittest.TestCase):
+    def test_save_config_is_private_under_default_umask(self):
+        old_umask = os.umask(0o022)
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                config_dir = Path(tmp) / ".config" / "telegram-cli"
+                with patch.object(cli, "CONFIG_DIR", config_dir), \
+                        patch.object(cli, "CONFIG_PATH", config_dir / "config.json"):
+                    cli.save_config({"session_string": "secret"})
+                    cli.save_config({"session_string": "secret2"})
+                self.assertEqual(config_dir.stat().st_mode & 0o777, 0o700)
+                self.assertEqual((config_dir / "config.json").stat().st_mode & 0o777, 0o600)
+                self.assertEqual([p.name for p in config_dir.iterdir()], ["config.json"])
+                self.assertIn("secret2", (config_dir / "config.json").read_text())
+        finally:
+            os.umask(old_umask)
+
+
 if __name__ == "__main__":
     unittest.main()
