@@ -106,17 +106,136 @@ class AutoreviewCursorTests(unittest.TestCase):
 
 
 class AutoreviewPriorityTests(unittest.TestCase):
-    def test_default_priority_is_p0(self) -> None:
-        with mock.patch.object(sys, "argv", ["autoreview"]):
+    def test_default_priority_is_p1(self) -> None:
+        with mock.patch.object(sys, "argv", ["autoreview"]), mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("AUTOREVIEW_MAX_PRIORITY", None)
             args = AUTOREVIEW.parse_args()
-        self.assertEqual(args.max_priority, "P0")
+        self.assertEqual(args.max_priority, "P1")
 
-    def test_priority_filter_omits_lower_findings_and_cleans_verdict(self) -> None:
+    def test_priority_filter_reports_count_and_keeps_verdict(self) -> None:
         report = copy.deepcopy(DRAFT_REPORT)
-        AUTOREVIEW.filter_findings_by_priority(report, "P0")
+        with contextlib.redirect_stderr(io.StringIO()) as stderr:
+            AUTOREVIEW.filter_findings_by_priority(report, "P0")
         self.assertEqual(report["findings"], [])
-        self.assertEqual(report["overall_correctness"], "patch is correct")
-        self.assertIn("below the requested P0", report["overall_explanation"])
+        self.assertEqual(report["overall_correctness"], "patch is incorrect")
+        self.assertIn("Filtered 1 finding(s) below the requested P0", report["overall_explanation"])
+        self.assertIn("filtered 1 finding(s)", stderr.getvalue())
+
+    def test_default_threshold_keeps_p1_security_findings(self) -> None:
+        report = copy.deepcopy(DRAFT_REPORT)
+        report["findings"][0].update(priority="P1", category="security")
+        AUTOREVIEW.filter_findings_by_priority(report, "P1")
+        self.assertEqual(len(report["findings"]), 1)
+        self.assertEqual(report["overall_correctness"], "patch is incorrect")
+
+
+class AutoreviewSecretBypassTests(unittest.TestCase):
+    SECRET_LINE = 'const apiKey = "sk-live-' + "Z9" * 16 + '";'
+
+    def tearDown(self) -> None:
+        AUTOREVIEW.ALLOWED_SECRET_LINES = frozenset()
+
+    def test_repository_markers_cannot_bypass_secret_check(self) -> None:
+        self.assertTrue(AUTOREVIEW.secret_text_risk(self.SECRET_LINE))
+        self.assertTrue(AUTOREVIEW.secret_text_risk(self.SECRET_LINE + " // autoreview:allow-secret"))
+        self.assertTrue(AUTOREVIEW.secret_text_risk("// autoreview:allow-secret-file\n" + self.SECRET_LINE))
+
+    def test_user_flag_exempts_only_the_exact_line(self) -> None:
+        with mock.patch.object(sys, "argv", ["autoreview", "--allow-secret-line", "  " + self.SECRET_LINE]):
+            args = AUTOREVIEW.parse_args()
+        AUTOREVIEW.ALLOWED_SECRET_LINES = frozenset(line.strip() for line in args.allow_secret_line)
+        self.assertFalse(AUTOREVIEW.secret_text_risk("    " + self.SECRET_LINE))
+        self.assertFalse(AUTOREVIEW.secret_text_risk("+    " + self.SECRET_LINE))
+        other = self.SECRET_LINE.replace("Z9", "Y8")
+        self.assertTrue(AUTOREVIEW.secret_text_risk(other))
+
+
+class AutoreviewTestboxCredentialTests(unittest.TestCase):
+    def test_testbox_credential_copy_is_opt_in(self) -> None:
+        with mock.patch.object(sys, "argv", ["autoreview"]):
+            self.assertFalse(AUTOREVIEW.parse_args().copy_testbox_credentials)
+        with mock.patch.object(sys, "argv", ["autoreview", "--copy-testbox-credentials"]):
+            self.assertTrue(AUTOREVIEW.parse_args().copy_testbox_credentials)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            repo = root / "repo"
+            repo.mkdir()
+            host_home = root / "host"
+            (host_home / ".blacksmith").mkdir(parents=True)
+            (host_home / ".blacksmith" / "credentials").write_text("fixture")
+            with mock.patch.dict(os.environ, {"HOME": str(host_home), "OPENCLAW_TESTBOX": "1"}):
+                AUTOREVIEW.safe_test_env(repo, root / "plain-home")
+                self.assertFalse((root / "plain-home" / ".blacksmith").exists())
+                AUTOREVIEW.safe_test_env(repo, root / "opt-in-home", copy_testbox_credentials=True)
+                self.assertEqual((root / "opt-in-home" / ".blacksmith" / "credentials").read_text(), "fixture")
+
+
+def init_fixture_repo(repo: Path) -> None:
+    for command in [["init", "-q"], ["config", "user.email", "fixture@example.invalid"], ["config", "user.name", "Fixture"]]:
+        subprocess.run(["git", *command], cwd=repo, check=True, capture_output=True)
+
+
+class AutoreviewRepoAccessWorkspaceTests(unittest.TestCase):
+    def test_workspace_omits_ignored_credential_and_secret_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            repo = root / "repo"
+            repo.mkdir()
+            init_fixture_repo(repo)
+            (repo / ".gitignore").write_text("*.local\nignored/\n")
+            (repo / "app.py").write_text("def main():\n    return 1\n")
+            (repo / "notes.md").write_text("untracked but not ignored\n")
+            (repo / ".env").write_text("OPENAI_API_KEY=sk-" + "A1" * 20 + "\n")
+            (repo / "settings.local").write_text("ignored\n")
+            (repo / "ignored").mkdir()
+            (repo / "ignored" / "data.txt").write_text("ignored\n")
+            (repo / "id_rsa").write_text("-----BEGIN OPENSSH PRIVATE KEY-----\nabc\n")
+            (repo / "config.py").write_text('API_KEY = "sk-live-' + "Q7" * 16 + '"\n')
+            subprocess.run(["git", "add", ".gitignore", "app.py", "config.py"], cwd=repo, check=True)
+            workspace = root / "workspace"
+            workspace.mkdir()
+            omitted = AUTOREVIEW.materialize_repo_access_workspace(repo, workspace)
+            copied = sorted(str(path.relative_to(workspace)) for path in workspace.rglob("*") if path.is_file())
+            self.assertEqual(copied, [".gitignore", "app.py", "notes.md"])
+            self.assertGreaterEqual(omitted, 3)
+
+    def test_codex_alias_resolution_runs_isolated(self) -> None:
+        args = argparse.Namespace(
+            codex_bin="codex", codex_config=None, codex_speed=None, fallback_model=None,
+            model="sol", stream_engine_output=False, thinking=None, tools=True, web_search=False,
+        )
+        observed: dict[str, object] = {}
+
+        def fake_subprocess_run(command, **kwargs):
+            observed["alias_command"] = command
+            observed["alias_cwd"] = kwargs["cwd"]
+            observed["alias_env"] = kwargs["env"]
+            models = {"models": [{"slug": "gpt-6.1-sol", "visibility": "list"}, {"slug": "gpt-6-sol", "visibility": "list"}]}
+            return subprocess.CompletedProcess(command, 0, json.dumps(models), "")
+
+        def fake_review(command, *_args, **_kwargs):
+            observed["review_command"] = command
+            Path(command[command.index("--output-last-message") + 1]).write_text(json.dumps(FINAL_REPORT))
+            return subprocess.CompletedProcess(command, 0, "", "")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = Path(tmpdir)
+            with mock.patch.dict(os.environ, {"CODEX_HOME": "", "LD_PRELOAD": "/repo/evil.so"}), mock.patch.object(
+                AUTOREVIEW, "resolve_command", return_value="/usr/bin/codex"
+            ), mock.patch.object(AUTOREVIEW, "codex_auth_config_flags", return_value=[]), mock.patch.object(
+                AUTOREVIEW, "prepare_codex_runtime_auth", return_value=None
+            ), mock.patch.object(AUTOREVIEW, "codex_source_home", return_value=None), mock.patch.object(
+                AUTOREVIEW.subprocess, "run", side_effect=fake_subprocess_run
+            ), mock.patch.object(AUTOREVIEW, "run_with_heartbeat", side_effect=fake_review):
+                AUTOREVIEW.run_codex(args, repo, "review")
+        command = observed["alias_command"]
+        self.assertEqual(command[-2:], ["debug", "models"])
+        self.assertIn("features.hooks=false", command)
+        self.assertNotEqual(Path(observed["alias_cwd"]).resolve(), repo.resolve())
+        self.assertNotIn("LD_PRELOAD", observed["alias_env"])
+        self.assertEqual(Path(observed["alias_env"]["CODEX_HOME"]).name, "codex-home")
+        review = observed["review_command"]
+        self.assertEqual(review[review.index("--model") + 1], "gpt-6.1-sol")
 
 
 class AutoreviewSecretScannerTests(unittest.TestCase):
@@ -311,91 +430,6 @@ class AutoreviewCompatibilityTests(unittest.TestCase):
         args = argparse.Namespace(codex_config=['model_verbosity="low"'])
         self.assertEqual(AUTOREVIEW.codex_config_keys(args), ["model_verbosity"])
 
-    def test_opencodex_freezes_selected_catalog_without_loading_user_tools(self) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            root = Path(tmpdir)
-            repo = root / "repo"
-            repo.mkdir()
-            catalog = root / "catalog.json"
-            selected = {"slug": "kimi-code/k3", "display_name": "Kimi"}
-            catalog.write_text(json.dumps({"models": [selected, {"slug": "xai/grok-4.7"}]}))
-            config = {"openai_base_url": "http://127.0.0.1:10100/v1", "model_catalog_json": str(catalog),
-                      "mcp_servers": {"hostile": {"command": "touch"}}, "developer_instructions": "run send-it"}
-            with mock.patch.object(AUTOREVIEW, "codex_source_home", return_value=root), mock.patch.object(
-                AUTOREVIEW, "load_codex_auth_config", return_value=config
-            ):
-                flags = AUTOREVIEW.codex_opencodex_flags(argparse.Namespace(codex_opencodex=True), repo, root, "kimi-code/k3")
-            frozen = root / "opencodex-catalog.json"
-            catalog.write_text("{}")
-            self.assertEqual(json.loads(frozen.read_text()), {"models": [selected]})
-            self.assertIn('openai_base_url="http://127.0.0.1:10100/v1"', flags)
-            self.assertNotIn("hostile", " ".join(flags))
-            self.assertNotIn("developer_instructions", " ".join(flags))
-
-    def test_opencodex_rejects_remote_routes_and_repository_catalogs(self) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            root = Path(tmpdir)
-            repo = root / "repo"
-            repo.mkdir()
-            catalog = root / "catalog.json"
-            catalog.write_text(json.dumps({"models": [{"slug": "kimi-code/k3"}]}))
-            config = {"model_catalog_json": str(catalog)}
-            with mock.patch.object(AUTOREVIEW, "codex_source_home", return_value=root), mock.patch.object(
-                AUTOREVIEW, "load_codex_auth_config", return_value=config
-            ):
-                for endpoint in ["https://example.com/v1", "http://127.0.0.1.evil.example/v1", "http://user@localhost/v1", "http://localhost/v1?token=x"]:
-                    config["openai_base_url"] = endpoint
-                    with self.subTest(endpoint=endpoint), self.assertRaises(SystemExit):
-                        AUTOREVIEW.codex_opencodex_flags(argparse.Namespace(codex_opencodex=True), repo, root, "kimi-code/k3")
-                config["openai_base_url"] = "http://127.0.0.1:10100/v1"
-                linked = root / "linked.json"
-                linked.symlink_to(repo / "catalog.json")
-                config["model_catalog_json"] = str(linked)
-                with self.assertRaisesRegex(SystemExit, "outside"):
-                    AUTOREVIEW.codex_opencodex_flags(argparse.Namespace(codex_opencodex=True), repo, root, "kimi-code/k3")
-                (root / "config.toml").symlink_to(repo / "config.toml")
-                with self.assertRaisesRegex(SystemExit, "user config"):
-                    AUTOREVIEW.codex_opencodex_flags(argparse.Namespace(codex_opencodex=True), repo, root, "kimi-code/k3")
-
-    def test_opencodex_uses_same_origin_realtime_route(self) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            root = Path(tmpdir)
-            repo = root / "repo"
-            repo.mkdir()
-            catalog = root / "catalog.json"
-            catalog.write_text(json.dumps({"models": [{"slug": "xai/grok-4.7"}]}))
-            config = {
-                "openai_base_url": "http://127.0.0.1:10100/backend-api/codex",
-                "experimental_realtime_ws_base_url": "http://127.0.0.1:10100/v1",
-                "model_catalog_json": str(catalog),
-            }
-            with mock.patch.object(AUTOREVIEW, "codex_source_home", return_value=root), mock.patch.object(
-                AUTOREVIEW, "load_codex_auth_config", return_value=config
-            ):
-                flags = AUTOREVIEW.codex_opencodex_flags(argparse.Namespace(codex_opencodex=True), repo, root, "xai/grok-4.7")
-                self.assertIn('openai_base_url="http://127.0.0.1:10100/v1"', flags)
-                config["experimental_realtime_ws_base_url"] = "http://localhost:10101/v1"
-                with self.assertRaisesRegex(SystemExit, "loopback /v1"):
-                    AUTOREVIEW.codex_opencodex_flags(argparse.Namespace(codex_opencodex=True), repo, root, "xai/grok-4.7")
-
-    def test_opencodex_missing_model_fails_without_fallback(self) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            root = Path(tmpdir)
-            repo = root / "repo"
-            repo.mkdir()
-            catalog = root / "catalog.json"
-            catalog.write_text(json.dumps({"models": [{"slug": "xai/grok-4.7"}]}))
-            config = {"openai_base_url": "http://localhost:10100/v1", "model_catalog_json": str(catalog)}
-            with mock.patch.object(AUTOREVIEW, "codex_source_home", return_value=root), mock.patch.object(
-                AUTOREVIEW, "load_codex_auth_config", return_value=config
-            ), self.assertRaisesRegex(SystemExit, "missing or ambiguous"):
-                AUTOREVIEW.codex_opencodex_flags(argparse.Namespace(codex_opencodex=True), repo, root, "kimi-code/k3")
-        args = AUTOREVIEW.reviewer_test_args(model=["kimi-code/k3"])
-        args.codex_opencodex = True
-        reviewer = AUTOREVIEW.reviewer_args(args)[0]
-        self.assertEqual(reviewer.model, "kimi-code/k3")
-        self.assertIsNone(reviewer.fallback_model)
-
     def test_linux_runtime_grants_only_the_external_native_executable(self) -> None:
         with tempfile.TemporaryDirectory() as td, mock.patch.object(AUTOREVIEW.sys, "platform", "linux"), mock.patch.object(
             AUTOREVIEW.os, "uname", return_value=argparse.Namespace(machine="x86_64")
@@ -430,68 +464,6 @@ class AutoreviewCompatibilityTests(unittest.TestCase):
                 AUTOREVIEW.run_codex(args, Path(tmpdir), "review")
             request.assert_not_called()
 
-    def test_routed_models_use_prompt_schema_while_native_codex_keeps_api_schema(self) -> None:
-        with mock.patch.object(sys, "argv", ["autoreview"]):
-            args = AUTOREVIEW.reviewer_args(AUTOREVIEW.parse_args())[0]
-        with tempfile.TemporaryDirectory() as tmpdir, mock.patch.object(
-            AUTOREVIEW, "resolve_command", return_value="/usr/bin/codex"
-        ), mock.patch.object(AUTOREVIEW, "codex_auth_config_flags", return_value=[]), mock.patch.object(
-            AUTOREVIEW, "codex_opencodex_flags", return_value=[]
-        ):
-            root = Path(tmpdir)
-            for routed, model, schema in [(True, "kimi-code/k3", False), (True, "xai/grok-4.7", False), (False, "gpt-6-astra", True)]:
-                args.codex_opencodex = routed
-                with self.subTest(model=model):
-                    cmd = AUTOREVIEW.codex_command(args, root, root, root, root / "schema.json", root / "out.json", model)
-                    self.assertEqual("--output-schema" in cmd, schema)
-                    self.assertIn("--ignore-user-config", cmd)
-                    self.assertIn("--ignore-rules", cmd)
-                    self.assertIn("--json", cmd)
-
-    def test_routed_json_prefix_normalization_stays_strict(self) -> None:
-        with mock.patch.object(sys, "argv", ["autoreview", "--codex-opencodex", "--model", "kimi-code/k3"]):
-            args = AUTOREVIEW.reviewer_args(AUTOREVIEW.parse_args())[0]
-        with tempfile.TemporaryDirectory() as tmpdir, mock.patch.object(
-            AUTOREVIEW, "resolve_command", return_value="/usr/bin/codex"
-        ), mock.patch.object(AUTOREVIEW, "prepare_codex_runtime_auth", return_value=False), mock.patch.object(
-            AUTOREVIEW, "codex_source_home", return_value=None
-        ), mock.patch.object(AUTOREVIEW, "codex_opencodex_flags", return_value=[]):
-            for text, accepted in [("Inspected the code.\n" + json.dumps(FINAL_REPORT), True),
-                                   ("Inspected the code.\n" + json.dumps(FINAL_REPORT) + "\n{}", False),
-                                   ("Inspected the code.\n{}", False)]:
-                def request(cmd, *_args, **_kwargs):
-                    Path(cmd[cmd.index("--output-last-message") + 1]).write_text(text)
-                    return subprocess.CompletedProcess(cmd, 0, "", "")
-                with self.subTest(text=text), mock.patch.object(AUTOREVIEW, "run_with_heartbeat", side_effect=request):
-                    if accepted:
-                        report = AUTOREVIEW.run_reviewer(args, Path(tmpdir), "review", set(), [])
-                        self.assertEqual(report, FINAL_REPORT)
-                    else:
-                        with self.assertRaises(SystemExit):
-                            AUTOREVIEW.run_reviewer(args, Path(tmpdir), "review", set(), [])
-
-    def test_routed_reviews_bypass_inherited_proxies(self) -> None:
-        with mock.patch.object(sys, "argv", ["autoreview", "--codex-opencodex", "--model", "kimi-code/k3"]):
-            args = AUTOREVIEW.reviewer_args(AUTOREVIEW.parse_args())[0]
-        proxy_keys = ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy")
-        inherited = {key: "http://127.0.0.1:9" for key in proxy_keys}
-        inherited.update({"NO_PROXY": "", "no_proxy": ""})
-        with tempfile.TemporaryDirectory() as tmpdir, mock.patch.object(
-            AUTOREVIEW, "resolve_command", return_value="/usr/bin/codex"
-        ), mock.patch.object(AUTOREVIEW, "prepare_codex_runtime_auth", return_value=False), mock.patch.object(
-            AUTOREVIEW, "codex_source_home", return_value=None
-        ), mock.patch.object(AUTOREVIEW, "codex_opencodex_flags", return_value=[]), mock.patch.object(
-            AUTOREVIEW, "safe_engine_env", return_value=inherited.copy()
-        ):
-            def request(cmd, *_args, **kwargs):
-                self.assertTrue(all(key not in kwargs["env"] for key in proxy_keys))
-                self.assertEqual(kwargs["env"]["NO_PROXY"], "*")
-                self.assertEqual(kwargs["env"]["no_proxy"], "*")
-                Path(cmd[cmd.index("--output-last-message") + 1]).write_text(json.dumps(FINAL_REPORT))
-                return subprocess.CompletedProcess(cmd, 0, "", "")
-            with mock.patch.object(AUTOREVIEW, "run_with_heartbeat", side_effect=request):
-                self.assertEqual(json.loads(AUTOREVIEW.run_codex(args, Path(tmpdir), "review")), FINAL_REPORT)
-
     def test_legacy_toml_reader_preserves_only_needed_routing_fields(self) -> None:
         config = AUTOREVIEW.parse_codex_auth_config_fallback(
             'openai_base_url = "http://localhost:10100/v1"\n'
@@ -504,15 +476,16 @@ class AutoreviewCompatibilityTests(unittest.TestCase):
                                   "model_catalog_json": "/external/catalog.json"})
 
     def test_repo_access_requires_completed_successful_shell_tool(self) -> None:
-        with mock.patch.object(sys, "argv", ["autoreview", "--repo-access"]):
+        with mock.patch.object(sys, "argv", ["autoreview", "--repo-access", "--model", "gpt-6-astra"]):
             args = AUTOREVIEW.reviewer_args(AUTOREVIEW.parse_args())[0]
         with tempfile.TemporaryDirectory() as tmpdir, mock.patch.object(
             AUTOREVIEW, "resolve_command", return_value="/usr/bin/codex"
         ), mock.patch.object(AUTOREVIEW, "prepare_codex_runtime_auth", return_value=False), mock.patch.object(
             AUTOREVIEW, "codex_source_home", return_value=None
         ), mock.patch.object(AUTOREVIEW.sys, "platform", "linux"), mock.patch.object(
-            AUTOREVIEW, "run", return_value=subprocess.CompletedProcess([], 0, str(Path(tmpdir).resolve()) + "\n", "")
+            AUTOREVIEW, "run", side_effect=lambda _cmd, cwd, **_kw: subprocess.CompletedProcess([], 0, str(cwd.resolve()) + "\n", "")
         ):
+            init_fixture_repo(Path(tmpdir))
             for event, accepted in [(None, False), ({"type": "item.completed", "item": {"type": "command_execution", "exit_code": 1}}, False),
                                     ({"type": "item.started", "item": {"type": "command_execution", "exit_code": 0}}, False),
                                     ({"type": "item.completed", "item": {"type": "command_execution", "exit_code": 0}}, True)]:

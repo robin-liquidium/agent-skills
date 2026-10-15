@@ -4925,7 +4925,7 @@ class AutoreviewHardeningTests(unittest.TestCase):
             with mock.patch.dict(
                 self.helper["start_parallel_tests"].__globals__,
                 {
-                    "safe_test_env": lambda actual_repo, test_home: (
+                    "safe_test_env": lambda actual_repo, test_home, **_kwargs: (
                         sanitized_env
                         if actual_repo == repo and not test_home.is_relative_to(repo)
                         else self.fail("parallel tests sanitized the wrong repository")
@@ -5457,7 +5457,14 @@ class AutoreviewHardeningTests(unittest.TestCase):
                 )
                 os.environ["UNRELATED_VALUE"] = "ghp_" + "A" * 24
 
-                env = self.helper["safe_test_env"](repo, isolated_home)
+                no_copy_home = root / "no-copy-home"
+                no_copy_env = self.helper["safe_test_env"](repo, no_copy_home)
+                self.assertEqual(no_copy_env["OPENCLAW_TESTBOX"], "1")
+                self.assertFalse((no_copy_home / ".blacksmith").exists())
+
+                env = self.helper["safe_test_env"](
+                    repo, isolated_home, copy_testbox_credentials=True
+                )
 
                 self.assertEqual(env["PATH"], os.environ["PATH"])
                 self.assertEqual(env["CI"], "1")

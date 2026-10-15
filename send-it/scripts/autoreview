@@ -1368,7 +1368,9 @@ def copy_blacksmith_testbox_credentials(
     target.chmod(0o600)
 
 
-def safe_test_env(repo: Path, isolated_home: Path) -> dict[str, str]:
+def safe_test_env(
+    repo: Path, isolated_home: Path, *, copy_testbox_credentials: bool = False
+) -> dict[str, str]:
     resolved_home = isolated_home.resolve()
     if is_within(resolved_home, repo.resolve()):
         raise SystemExit("parallel test home must be outside the reviewed repository")
@@ -1432,7 +1434,9 @@ def safe_test_env(repo: Path, isolated_home: Path) -> dict[str, str]:
         }
     )
     original_home = os.environ.get("HOME") or os.environ.get("USERPROFILE")
-    if env.get("OPENCLAW_TESTBOX", "").strip().lower() in {
+    # Copying another tool's credentials into the test home is opt-in only
+    # (--copy-testbox-credentials), never implied by the environment.
+    if copy_testbox_credentials and env.get("OPENCLAW_TESTBOX", "").strip().lower() in {
         "1",
         "true",
         "yes",
@@ -6283,16 +6287,27 @@ def mask_placeholder_url_params(text: str) -> str:
     return URL_PARAM_SECRET_VALUE_PATTERN.sub(replace, text)
 
 
+# Exact source lines the user confirmed as false positives via --allow-secret-line.
+# Repository content can never exempt itself from the secret check.
+ALLOWED_SECRET_LINES: frozenset[str] = frozenset()
+
+
+def allowed_secret_line(line: str) -> bool:
+    stripped = line.strip()
+    if stripped in ALLOWED_SECRET_LINES:
+        return True
+    # Diff lines carry a one-character +/-/space prefix.
+    return line[:1] in {"+", "-", " "} and line[1:].strip() in ALLOWED_SECRET_LINES
+
+
 def secret_text_risk(
     text: str,
     *,
     javascript_dialect: str | None = None,
 ) -> bool:
-    if "autoreview:allow-secret-file" in text:
-        return False
-    if "autoreview:allow-secret" in text:
+    if ALLOWED_SECRET_LINES:
         text = "\n".join(
-            "" if "autoreview:allow-secret" in line else line
+            "" if allowed_secret_line(line) else line
             for line in text.split("\n")
         )
     text = mask_placeholder_url_params(text)
@@ -8215,6 +8230,38 @@ def file_bundle_snapshot(
     return text, False, None
 
 
+def materialize_repo_access_workspace(repo: Path, root: Path) -> int:
+    """Copy reviewable repository files into root for --repo-access reviewers.
+
+    Only tracked and non-ignored untracked files are copied. Ignored files
+    (.env and similar), credential paths, symlinks, binaries, oversized files
+    and files with secret-like content are left out, so reviewer read/grep
+    tools never see them. Returns the number of omitted files.
+    """
+    tracked = git_path_list(repo, "ls-files", "-z")
+    untracked = git_path_list(
+        repo,
+        *global_excludes_git_args(repo),
+        "ls-files",
+        "--others",
+        "--exclude-standard",
+        "-z",
+    )
+    omitted = 0
+    for rel in sorted(set(tracked + untracked)):
+        text, truncated, risk = file_bundle_snapshot(repo, repo / rel, rel)
+        if (
+            risk
+            or truncated
+            or tracked_sensitive_repo_path_risk(rel) is not None
+            or secret_text_risk(text)
+        ):
+            omitted += 1
+            continue
+        write_snapshot_blob(root, rel, text.encode("utf-8"))
+    return omitted
+
+
 def collect_untracked_file_snapshots(
     repo: Path,
 ) -> tuple[list[tuple[str, str, bool]], int]:
@@ -9261,8 +9308,8 @@ def render_review_prompt(
     scope_policy = review_scope_policy()
     if repo_access:
         sandbox_rule = (
-            "- You have read-only access to the reviewed repository (read/grep/glob only; "
-            "gitignored files are excluded from search). Use it to verify context such as callers, "
+            "- You have read-only access to a filtered copy of the reviewed repository (read/grep/glob only; "
+            "ignored, credential and secret-like files are omitted). Use it to verify context such as callers, "
             "imports, definitions, and surrounding code. Do not modify anything."
         )
         missing_context_rule = (
@@ -9680,64 +9727,6 @@ def codex_exec_isolation_flags() -> list[str]:
     return ["--ignore-user-config", "--ignore-rules", "--skip-git-repo-check"]
 
 
-def codex_opencodex_flags(
-    args: argparse.Namespace, repo: Path, runtime_root: Path, model: str | None
-) -> list[str]:
-    if not getattr(args, "codex_opencodex", False):
-        return []
-    source_home = codex_source_home(repo)
-    if source_home is None or not model or "/" not in model:
-        raise SystemExit("--codex-opencodex requires an external Codex home and an explicit provider/model")
-    config_path = (source_home / "config.toml").resolve()
-    if not external_env_path(repo, str(config_path)):
-        raise SystemExit("OpenCodex user config must be outside the reviewed repository")
-    config = load_codex_auth_config(config_path)
-    endpoint = config.get("openai_base_url")
-    if not isinstance(endpoint, str):
-        raise SystemExit("OpenCodex routing requires openai_base_url in the user Codex config")
-    url = urllib.parse.urlsplit(endpoint)
-    if url.path.rstrip("/") == "/backend-api/codex":
-        realtime_endpoint = config.get("experimental_realtime_ws_base_url")
-        if isinstance(realtime_endpoint, str):
-            realtime_url = urllib.parse.urlsplit(realtime_endpoint)
-            if realtime_url.scheme == url.scheme and realtime_url.netloc == url.netloc:
-                endpoint, url = realtime_endpoint, realtime_url
-    if (
-        url.scheme != "http"
-        or url.hostname not in {"127.0.0.1", "localhost", "::1"}
-        or url.username is not None
-        or url.password is not None
-        or url.path.rstrip("/") != "/v1"
-        or url.query
-        or url.fragment
-    ):
-        raise SystemExit("OpenCodex review requires a local HTTP loopback /v1 endpoint without credentials")
-    catalog_value = config.get("model_catalog_json")
-    if not isinstance(catalog_value, str) or not Path(catalog_value).is_absolute():
-        raise SystemExit("OpenCodex routing requires an absolute model_catalog_json in the user Codex config")
-    catalog_path = Path(catalog_value).resolve()
-    if not external_env_path(repo, str(catalog_path)):
-        raise SystemExit("OpenCodex model catalog must be outside the reviewed repository")
-    try:
-        data, truncated = read_prefix(catalog_path, 8_000_000)
-        catalog = json.loads(data)
-    except (OSError, ValueError) as exc:
-        raise SystemExit("unable to read the OpenCodex model catalog") from exc
-    if truncated or not isinstance(catalog, dict) or not isinstance(catalog.get("models"), list):
-        raise SystemExit("invalid or oversized OpenCodex model catalog")
-    selected = [item for item in catalog["models"] if isinstance(item, dict) and item.get("slug") == model]
-    if len(selected) != 1:
-        raise SystemExit(f"OpenCodex model is missing or ambiguous in the catalog: {model}")
-    # Freeze only the selected model's metadata; never load the rest of user config.
-    frozen_catalog = runtime_root / "opencodex-catalog.json"
-    frozen_catalog.write_text(json.dumps({"models": selected}))
-    return [
-        "-c", 'model_provider="openai"',
-        "-c", f"openai_base_url={json.dumps(endpoint)}",
-        "-c", f"model_catalog_json={json.dumps(str(frozen_catalog))}",
-    ]
-
-
 def claude_review_isolation_flags() -> list[str]:
     return [
         "--safe-mode",
@@ -9943,6 +9932,36 @@ def codex_model_access_failure(result: subprocess.CompletedProcess[str], model: 
     return False
 
 
+def resolve_codex_model_alias(
+    codex_bin: str, family: str, config_flags: list[str], cwd: Path, env: dict[str, str]
+) -> str:
+    """Resolve a bare family name like "sol" to the newest listed gpt-<version>-<family> slug.
+
+    Runs with the reviewer's sanitized env, isolation config flags and a neutral
+    cwd, so repository-local config or loader/PATH settings cannot influence it.
+    """
+    try:
+        result = subprocess.run(
+            [codex_bin, *config_flags, "debug", "models"],
+            cwd=cwd,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=True,
+        )
+        models = json.loads(result.stdout)["models"]
+    except (OSError, subprocess.SubprocessError, ValueError, KeyError):
+        return family
+    pattern = re.compile(rf"^gpt-(\d+(?:\.\d+)*)-{re.escape(family)}$")
+    versions = {
+        tuple(int(part) for part in match.group(1).split(".")): model["slug"]
+        for model in models
+        if model.get("visibility") == "list" and (match := pattern.match(model.get("slug", "")))
+    }
+    return versions[max(versions)] if versions else family
+
+
 def codex_command(
     args: argparse.Namespace,
     source_repo: Path,
@@ -9972,13 +9991,9 @@ def codex_command(
     cmd.extend(codex_config_isolation_flags(review_root, runtime_root))
     cmd.extend(codex_linux_runtime_flags(source_repo, cmd[0]))
     cmd.extend(codex_auth_config_flags(source_repo, force_file=force_file_auth))
-    cmd.extend(codex_opencodex_flags(args, source_repo, runtime_root, model))
     cmd.append("exec")
     cmd.append("--json")
-    # Routed Kimi/Grok can finalize before tool inspection when response_format
-    # is enforced. The prompt still specifies SCHEMA and the host validates it.
-    if not getattr(args, "codex_opencodex", False):
-        cmd.extend(["--output-schema", str(schema_path)])
+    cmd.extend(["--output-schema", str(schema_path)])
     cmd.extend(
         [
             *codex_exec_isolation_flags(),
@@ -9991,6 +10006,27 @@ def codex_command(
         ]
     )
     return cmd
+
+
+def codex_engine_env(repo: Path, codex_bin: str, runtime_root: Path, codex_home: Path) -> dict[str, str]:
+    runtime_home = runtime_root / "home"
+    return safe_engine_env(
+        repo,
+        [Path(codex_bin).parent],
+        engine="codex",
+        extra={
+            "HOME": str(runtime_home),
+            "USERPROFILE": str(runtime_home),
+            "XDG_CACHE_HOME": str(runtime_home / ".cache"),
+            "XDG_CONFIG_HOME": str(runtime_home / ".config"),
+            "XDG_DATA_HOME": str(runtime_home / ".local" / "share"),
+            "XDG_STATE_HOME": str(runtime_home / ".local" / "state"),
+            # Keyring namespaces are derived from canonical CODEX_HOME.
+            # Linked file auth uses the isolated home; keyring/auto must
+            # retain the source namespace until Codex supports an auth split.
+            "CODEX_HOME": str(codex_home),
+        },
+    )
 
 
 def run_codex(args: argparse.Namespace, repo: Path, prompt: str) -> str:
@@ -10014,8 +10050,9 @@ def run_codex(args: argparse.Namespace, repo: Path, prompt: str) -> str:
         # Without --repo-access, the validated bundle is the sole repository
         # input. The empty workspace keeps ignored credentials and
         # linked-worktree metadata outside the model's readable filesystem
-        # boundary. With --repo-access the workspace is the repo itself, still
-        # read-only via the autoreview permission profile.
+        # boundary. With --repo-access the workspace is a filtered copy of the
+        # tracked and non-ignored files (no ignored, credential-path or
+        # secret-like files), still read-only via the autoreview profile.
         with tempfile.TemporaryDirectory(
             prefix="autoreview-codex-workspace.",
             dir=temp_root,
@@ -10023,7 +10060,9 @@ def run_codex(args: argparse.Namespace, repo: Path, prompt: str) -> str:
             prefix="autoreview-codex-runtime.",
             dir=temp_root,
         ) as runtime_dir:
-            review_root = repo if getattr(args, "repo_access", False) else Path(workspace_dir)
+            review_root = Path(workspace_dir)
+            if getattr(args, "repo_access", False):
+                materialize_repo_access_workspace(repo, review_root)
             runtime_root = Path(runtime_dir)
             runtime_home = runtime_root / "home"
             runtime_config = runtime_home / ".config"
@@ -10049,6 +10088,18 @@ def run_codex(args: argparse.Namespace, repo: Path, prompt: str) -> str:
             )
             for index, model in enumerate(models):
                 output_path.write_text("")
+                if model and re.fullmatch(r"[a-z]+", model):
+                    codex_bin = resolve_command(args.codex_bin, repo)
+                    model = resolve_codex_model_alias(
+                        codex_bin,
+                        model,
+                        [
+                            *codex_config_isolation_flags(review_root, runtime_root),
+                            *codex_auth_config_flags(repo, force_file=file_auth_linked),
+                        ],
+                        runtime_root,
+                        codex_engine_env(repo, codex_bin, runtime_root, active_codex_home),
+                    )
                 cmd = codex_command(
                     args,
                     repo,
@@ -10059,30 +10110,7 @@ def run_codex(args: argparse.Namespace, repo: Path, prompt: str) -> str:
                     model,
                     force_file_auth=file_auth_linked,
                 )
-                engine_env = safe_engine_env(
-                    repo,
-                    [Path(cmd[0]).parent],
-                    engine="codex",
-                    extra={
-                        "HOME": str(runtime_home),
-                        "USERPROFILE": str(runtime_home),
-                        "XDG_CACHE_HOME": str(runtime_cache),
-                        "XDG_CONFIG_HOME": str(runtime_config),
-                        "XDG_DATA_HOME": str(runtime_data),
-                        "XDG_STATE_HOME": str(runtime_state),
-                        # Keyring namespaces are derived from canonical CODEX_HOME.
-                        # Linked file auth uses the isolated home; keyring/auto must
-                        # retain the source namespace until Codex supports an auth split.
-                        "CODEX_HOME": str(active_codex_home),
-                    },
-                )
-                if getattr(args, "codex_opencodex", False):
-                    # Never send local provider traffic or its authorization through
-                    # an inherited proxy. NO_PROXY also bypasses system proxies.
-                    for key in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"):
-                        engine_env.pop(key, None)
-                    engine_env["NO_PROXY"] = "*"
-                    engine_env["no_proxy"] = "*"
+                engine_env = codex_engine_env(repo, cmd[0], runtime_root, active_codex_home)
                 if index == 0 and getattr(args, "repo_access", False) and sys.platform in {"darwin", "linux"}:
                     probe = run(
                         [cmd[0], "sandbox", *codex_config_isolation_flags(review_root, runtime_root),
@@ -10123,19 +10151,6 @@ def run_codex(args: argparse.Namespace, repo: Path, prompt: str) -> str:
                                 tool_completed = True
                         if not tool_completed:
                             raise SystemExit("Codex returned without successful shell-tool execution; repository review is incomplete")
-                    if getattr(args, "codex_opencodex", False) and output:
-                        # These providers sometimes prefix the final JSON with prose.
-                        # Accept only a complete trailing object; normal schema and
-                        # finding-location validation still runs in run_reviewer.
-                        start = output.find("{")
-                        if start > 0:
-                            try:
-                                parsed = json.loads(output[start:])
-                            except ValueError:
-                                pass
-                            else:
-                                if isinstance(parsed, dict):
-                                    output = json.dumps(parsed)
                     return output or result.stdout
                 if (
                     index == 0
@@ -10225,12 +10240,12 @@ def run_copilot(args: argparse.Namespace, repo: Path, prompt: str) -> str:
     )
 
 
-def build_opencode_cmd(args: argparse.Namespace, repo: Path) -> list[str]:
+def build_opencode_cmd(args: argparse.Namespace, repo: Path, review_dir: Path | None = None) -> list[str]:
     cmd = [
         resolve_command(args.opencode_bin, repo),
         "run",
         "--dir",
-        str(repo),
+        str(review_dir or repo),
         "--pure",
         "--format",
         "json",
@@ -10285,22 +10300,32 @@ class OpenCodeStreamDisplay:
 
 
 def run_opencode(args: argparse.Namespace, repo: Path, prompt: str) -> str:
-    cmd = build_opencode_cmd(args, repo)
-    result = run_with_heartbeat(
-        cmd,
-        repo,
-        input_text=prompt,
-        label="opencode",
-        stream_output=args.stream_engine_output,
-        stream_display=OpenCodeStreamDisplay() if args.stream_engine_output else None,
-        env=safe_engine_env(
-            repo,
-            [Path(cmd[0]).parent],
-            engine="opencode",
-            extra=opencode_review_env(args.web_search, getattr(args, "repo_access", False)),
-        ),
-        resolve_root=repo,
-    )
+    repo_access = getattr(args, "repo_access", False)
+    with tempfile.TemporaryDirectory(
+        prefix="autoreview-opencode-workspace.",
+        dir=safe_temp_root(repo),
+    ) as workspace_dir:
+        # Repository read tools only ever see the filtered copy, never ignored
+        # or credential files in the real checkout.
+        review_dir = Path(workspace_dir) if repo_access else repo
+        if repo_access:
+            materialize_repo_access_workspace(repo, review_dir)
+        cmd = build_opencode_cmd(args, repo, review_dir)
+        result = run_with_heartbeat(
+            cmd,
+            review_dir,
+            input_text=prompt,
+            label="opencode",
+            stream_output=args.stream_engine_output,
+            stream_display=OpenCodeStreamDisplay() if args.stream_engine_output else None,
+            env=safe_engine_env(
+                repo,
+                [Path(cmd[0]).parent],
+                engine="opencode",
+                extra=opencode_review_env(args.web_search, repo_access),
+            ),
+            resolve_root=repo,
+        )
     if result.returncode != 0:
         detail = result.stderr or result.stdout
         raise SystemExit(f"opencode engine failed ({result.returncode})\n{detail}")
@@ -11851,12 +11876,13 @@ def filter_findings_by_priority(
     if not removed:
         return
     report["findings"] = kept
-    if not kept and report["overall_correctness"] == "patch is incorrect":
-        report["overall_correctness"] = "patch is correct"
+    # Never turn an incorrect verdict into a clean one by filtering: the
+    # reviewer's verdict stands and the filtered count is reported instead.
     note = (
-        f"Omitted {removed} finding(s) below the requested "
-        f"{max_priority} priority threshold."
+        f"Filtered {removed} finding(s) below the requested "
+        f"{max_priority} priority threshold; verdict unchanged."
     )
+    print(f"autoreview filtered {removed} finding(s) below {max_priority}", file=sys.stderr)
     report["overall_explanation"] = bounded_field(
         report["overall_explanation"].rstrip() + "\n\n" + note,
         3000,
@@ -11899,6 +11925,8 @@ def start_parallel_tests(
     command: str,
     repo: Path,
     shell_kind: str,
+    *,
+    copy_testbox_credentials: bool = False,
 ) -> tuple[subprocess.Popen, float]:
     print(f"tests: {command}")
     test_home = Path(
@@ -11908,7 +11936,7 @@ def start_parallel_tests(
         )
     )
     try:
-        env = safe_test_env(repo, test_home)
+        env = safe_test_env(repo, test_home, copy_testbox_credentials=copy_testbox_credentials)
         popen_kwargs = {
             "cwd": repo,
             "env": env,
@@ -12012,11 +12040,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--allow-partial-panel", action="store_true", help="Continue panel output when one reviewer fails.")
     parser.add_argument("--codex-bin", default=os.environ.get("CODEX_BIN", "codex"))
     parser.add_argument(
-        "--codex-opencodex",
-        action="store_true",
-        help="Route an explicit provider/model through the local OpenCodex endpoint and catalog from user Codex config; retain review isolation.",
-    )
-    parser.add_argument(
         "--codex-config",
         action="append",
         help='Safe Codex model/response tuning "-c key=value" override (TOML value), codex reviewer only. Repeatable. Capability-, command-, and path-bearing keys are refused. Env default: AUTOREVIEW_CODEX_CONFIG (semicolon-separated), e.g. service_tier="fast".',
@@ -12047,9 +12070,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--self-test-cursor-isolation", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--no-web-search", dest="web_search", action="store_false", default=True)
     parser.add_argument(
+        "--allow-secret-line",
+        action="append",
+        default=[],
+        metavar="LINE",
+        help="exact source line (whitespace-trimmed) to exempt from the built-in secret-content check after it was verified as a false positive; repeatable; never use for real credentials",
+    )
+    parser.add_argument(
         "--repo-access",
         action="store_true",
-        help="give the reviewer read-only repository access (read/grep/glob; codex and opencode engines only); Codex additionally requires successful shell-tool execution; verify callers, imports, and surrounding code; findings must still target the change bundle",
+        help="give the reviewer read-only access to a filtered repository copy (tracked and non-ignored files only; ignored, credential-path and secret-like files omitted; read/grep/glob; codex and opencode engines only); Codex additionally requires successful shell-tool execution; verify callers, imports, and surrounding code; findings must still target the change bundle",
     )
     parser.add_argument(
         "--claude-allowed-tools",
@@ -12064,8 +12094,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--max-priority",
         choices=["P0", "P1", "P2", "P3"],
-        default=os.environ.get("AUTOREVIEW_MAX_PRIORITY", "P0"),
-        help="Widest finding priority to report. Default: P0.",
+        default=os.environ.get("AUTOREVIEW_MAX_PRIORITY", "P1"),
+        help="Widest finding priority to report. Default: P1. Filtering never changes the verdict.",
     )
     parser.add_argument("--output", help="Write human output to a file as well as stdout.")
     parser.add_argument("--json-output", help="Write validated structured review JSON.")
@@ -12089,6 +12119,11 @@ def parse_args() -> argparse.Namespace:
         help="Legacy compatibility flag. Cursor review remains unavailable.",
     )
     parser.add_argument("--parallel-tests", help="Run a test command concurrently with review; failure fails the helper.")
+    parser.add_argument(
+        "--copy-testbox-credentials",
+        action="store_true",
+        help="Opt-in: with OPENCLAW_TESTBOX set, copy ~/.blacksmith/credentials into the isolated --parallel-tests home. Off by default; use only when the user approves.",
+    )
     parser.add_argument(
         "--parallel-tests-shell",
         choices=["default", "cmd", "powershell", "pwsh"],
@@ -12231,8 +12266,6 @@ def reviewer_args(args: argparse.Namespace) -> list[argparse.Namespace]:
         raise SystemExit("--codex-config is only supported for codex; no codex reviewer selected")
     if getattr(args, "codex_speed", None) and "codex" not in selected_engines:
         raise SystemExit("--codex-speed is only supported for codex; no codex reviewer selected")
-    if getattr(args, "codex_opencodex", False) and selected_engines != {"codex"}:
-        raise SystemExit("--codex-opencodex requires a single Codex reviewer")
 
     seen: set[str] = set()
     result: list[argparse.Namespace] = []
@@ -12719,7 +12752,11 @@ def atomic_write_text(path: Path, content: str) -> None:
 
 
 def main() -> int:
+    global ALLOWED_SECRET_LINES
     args = parse_args()
+    ALLOWED_SECRET_LINES = frozenset(
+        line.strip() for line in getattr(args, "allow_secret_line", None) or [] if line.strip()
+    )
     if args.self_test:
         return self_test()
     if args.self_test_opencode_jsonl_parser:
@@ -12763,8 +12800,6 @@ def main() -> int:
         if reviewers[0].thinking:
             print(f"thinking: {reviewers[0].thinking}")
         if reviewers[0].engine == "codex":
-            if getattr(reviewers[0], "codex_opencodex", False):
-                print("route: local OpenCodex")
             config_keys = codex_config_keys(reviewers[0])
             if config_keys:
                 print(f"codex_config_keys: {', '.join(config_keys)}")
@@ -12847,7 +12882,12 @@ def main() -> int:
 
     tests_proc: tuple[subprocess.Popen, float] | None = None
     if args.parallel_tests:
-        tests_proc = start_parallel_tests(args.parallel_tests, repo, args.parallel_tests_shell)
+        tests_proc = start_parallel_tests(
+            args.parallel_tests,
+            repo,
+            args.parallel_tests_shell,
+            copy_testbox_credentials=args.copy_testbox_credentials,
+        )
     try:
         chunk_reports: list[tuple[str, dict[str, Any]]] = []
         for index, prompt in enumerate(prompts, start=1):
