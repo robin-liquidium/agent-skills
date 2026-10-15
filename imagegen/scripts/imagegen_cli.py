@@ -19,12 +19,15 @@ import sys
 import tempfile
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 CODEX_BASE_URL = "https://chatgpt.com/backend-api/codex"
+OFFICIAL_BACKEND_HOST = "chatgpt.com"
+LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1"}
 OAUTH_TOKEN_URL = "https://auth.openai.com/oauth/token"
 OAUTH_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
 DEFAULT_MODEL = "gpt-5.5"
@@ -283,7 +286,38 @@ def parse_sse_image_result(stream: bytes) -> str:
     raise ImagegenError("Codex backend stream ended without an image result.")
 
 
+def validate_base_url(base_url: str, allow_custom: bool) -> str:
+    """Only send Codex credentials to the official backend unless the user opts in.
+
+    Custom backends need --allow-custom-base-url and must use https (or http on localhost).
+    """
+    parsed = urllib.parse.urlsplit(base_url)
+    host = (parsed.hostname or "").lower()
+    if parsed.username or parsed.password:
+        raise ImagegenError("--base-url must not contain credentials.")
+    if parsed.scheme == "https" and host == OFFICIAL_BACKEND_HOST and parsed.port in (None, 443):
+        return base_url
+    if not allow_custom:
+        raise ImagegenError(
+            f"Refusing to send Codex credentials to {base_url!r}: only https://{OFFICIAL_BACKEND_HOST} "
+            "is allowed. Pass --allow-custom-base-url to use another trusted backend."
+        )
+    if parsed.scheme == "https" and host:
+        return base_url
+    if parsed.scheme == "http" and host in LOCAL_HOSTS:
+        return base_url
+    raise ImagegenError("Custom --base-url must use https, or http on localhost.")
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Never follow redirects with the bearer token attached."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # type: ignore[override]
+        raise ImagegenError(f"Codex backend redirected (HTTP {code}); refusing to follow with credentials.")
+
+
 def call_codex(args: argparse.Namespace, references: list[str]) -> bytes:
+    validate_base_url(args.base_url, args.allow_custom_base_url)
     payload = build_payload(args, references)
     headers = oauth_headers(args.auth_file, args.timeout)
     headers["Content-Type"] = "application/json"
@@ -298,7 +332,7 @@ def call_codex(args: argparse.Namespace, references: list[str]) -> bytes:
         method="POST",
     )
     try:
-        with urllib.request.urlopen(req, timeout=args.timeout) as resp:
+        with urllib.request.build_opener(_NoRedirect).open(req, timeout=args.timeout) as resp:
             raw = resp.read()
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")[:600]
@@ -377,6 +411,7 @@ def cmd_generate(args: argparse.Namespace) -> int:
     if not args.prompt:
         raise ImagegenError("Missing prompt. Use --prompt or --prompt-file.")
     validate_size(args.size)
+    validate_base_url(args.base_url, args.allow_custom_base_url)
 
     references = args.reference or []
     if len(references) > MAX_REFERENCES:
@@ -460,7 +495,10 @@ def build_parser() -> argparse.ArgumentParser:
     gen.add_argument("--size", default="auto", help="auto or WIDTHxHEIGHT (gpt-image-2 constraints).")
     gen.add_argument("--model", default=os.environ.get("IMAGEGEN_MODEL", DEFAULT_MODEL),
                      help="Codex orchestration model (default: gpt-5.5).")
-    gen.add_argument("--base-url", default=os.environ.get("IMAGEGEN_BASE_URL", CODEX_BASE_URL))
+    gen.add_argument("--base-url", default=os.environ.get("IMAGEGEN_BASE_URL", CODEX_BASE_URL),
+                     help=f"Backend URL (default: {CODEX_BASE_URL}). Other hosts need --allow-custom-base-url.")
+    gen.add_argument("--allow-custom-base-url", action="store_true",
+                     help="Allow sending Codex credentials to a non-default https (or localhost) backend.")
     gen.add_argument("--auth-file", help="Override Codex auth.json path.")
     gen.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT)
     gen.add_argument("--force", action="store_true", help="Allow overwriting the output file.")

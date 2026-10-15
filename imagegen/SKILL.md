@@ -7,6 +7,12 @@ description: Generate images from prompts and reference images via the Codex Cha
 
 Scriptable image generation backed by the user's Codex ChatGPT login. No `OPENAI_API_KEY` needed. Works on macOS and Linux with only Python 3.10+.
 
+## What it uses
+
+- **The user's own Codex login.** The CLI reads the ChatGPT OAuth tokens and account id from `$CODEX_HOME/auth.json` or `~/.codex/auth.json`, and when the access token is near expiry it refreshes it with Codex's OAuth client and writes the new tokens back to that file.
+- **A private endpoint.** Requests go to `https://chatgpt.com/backend-api/codex/responses` (the Codex backend, not the public OpenAI API) and count against the user's ChatGPT/Codex limits.
+- Tell the user this before first use if they have not used the skill before.
+
 ## Prerequisites
 
 - Run `codex login` once and choose ChatGPT auth. The CLI reads `$CODEX_HOME/auth.json` or `~/.codex/auth.json`.
@@ -42,6 +48,7 @@ Generate with reference images (max 5, used for style/composition/subject guidan
 - `--force`: overwrite existing output (default: auto-version `-v2`, `-v3`, ...).
 - `--timeout`: seconds (default 300).
 - `--dry-run`: print the planned request without calling the backend.
+- `--base-url` / `IMAGEGEN_BASE_URL`: the bearer token is sent only to `https://chatgpt.com`. Any other host is refused unless `--allow-custom-base-url` is also passed, and then it must be https (or http on localhost). Redirects are never followed.
 
 ## Output
 
