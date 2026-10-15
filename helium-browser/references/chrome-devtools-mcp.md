@@ -4,13 +4,17 @@ chrome-devtools-mcp reaches Helium only when its server is started with `--autoC
 
 ## Configure a Helium server
 
-Register a dedicated server so a plain `chrome-devtools` server keeps working for other tasks (macOS example; use the Linux or Windows user-data directory there):
+Adding an MCP server changes the user's agent configuration for every future session, so **ask the user before adding it** and say what it does: it runs the pinned `chrome-devtools-mcp` npm package, which can fully control their logged-in Helium. Skip this step if a Helium server is already configured.
+
+After approval, register a dedicated server so a plain `chrome-devtools` server keeps working for other tasks (macOS example; use the Linux or Windows user-data directory there). The version is pinned; bump it deliberately after checking the release notes:
 
 ```bash
-claude mcp add --scope user helium-devtools -- npx -y chrome-devtools-mcp@latest --autoConnect --userDataDir "$HOME/Library/Application Support/net.imput.helium"
+claude mcp add --scope user helium-devtools -- npx -y chrome-devtools-mcp@1.10.1 --autoConnect --userDataDir "$HOME/Library/Application Support/net.imput.helium"
 ```
 
-Other MCP clients take the same command and arguments in their server config. Do not pass `--executablePath` alone: it launches a separate Helium with a throwaway profile. New MCP servers load only in a new session.
+Prefer `--scope local` (this project only) when the user only needs it here. Other MCP clients take the same command and arguments in their server config. Do not pass `--executablePath` alone: it launches a separate Helium with a throwaway profile. New MCP servers load only in a new session.
+
+To remove it later: `claude mcp remove --scope user helium-devtools` (or the scope it was added with).
 
 ## Use
 
