@@ -1,3 +1,5 @@
+> **Archived (2026-10-16).** These skills are no longer maintained here. This repository is kept read-only for reference.
+
 # Agent Skills
 
 A small collection of practical AI agent skills.
